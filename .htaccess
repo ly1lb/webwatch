@@ -1,0 +1,22 @@
+DirectoryIndex index.php
+Options -Indexes
+
+# Priverstinis HTTPS (push pranešimams būtinas)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# Draudžiame privačius failus
+<FilesMatch "^(config\.php|config\.sample\.php|README\.md|\.git.*)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    <Files "sw.js">
+        Header set Cache-Control "no-cache"
+    </Files>
+</IfModule>
+AddType application/manifest+json .webmanifest
