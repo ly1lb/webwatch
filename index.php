@@ -54,19 +54,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['do'] ?? '') === 'setup' &&
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['do'] ?? '') === 'login') {
-    $attempts = $_SESSION['login_attempts'] ?? [];
-    $attempts = array_filter($attempts, fn($t) => $t > time() - 900);
+    // Bandymų ribojimas pagal IP (saugoma DB, ne sesijoje – kitaip lengva apeiti)
+    $key = 'login_fail_' . substr(sha1((string)($_SERVER['REMOTE_ADDR'] ?? '')), 0, 16);
+    $attempts = array_filter(json_decode((string)setting($key, '[]'), true) ?: [], fn($t) => $t > time() - 900);
     if (count($attempts) >= 8) {
         flash('Per daug bandymų. Palaukite 15 min.', 'err');
         redirect('./');
     }
     if (password_verify((string)($_POST['password'] ?? ''), (string)setting('password_hash', ''))) {
         login_user();
-        $_SESSION['login_attempts'] = [];
+        set_setting($key, null);
         redirect('./');
     }
     $attempts[] = time();
-    $_SESSION['login_attempts'] = $attempts;
+    set_setting($key, json_encode(array_values($attempts)));
     usleep(700000);
     flash('Neteisingas slaptažodis', 'err');
     redirect('./');
@@ -150,9 +151,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'ignore_numbers' => !empty($_POST['ignore_numbers']) ? 1 : 0,
             'ignore_regex' => trim((string)($_POST['ignore_regex'] ?? '')),
             'interval_min' => array_key_exists((int)($_POST['interval_min'] ?? 60), interval_options()) ? (int)$_POST['interval_min'] : 60,
-            'notify' => array_key_exists($_POST['notify'] ?? '', notify_modes()) ? $_POST['notify'] : 'auto',
+            'notify' => implode(',', array_intersect(WW_CHANNELS, (array)($_POST['channels'] ?? []))),
             'active' => !empty($_POST['active']) ? 1 : 0,
+            'tags' => normalize_tags((string)($_POST['tags'] ?? '')),
+            'headers' => trim((string)($_POST['headers'] ?? '')),
+            'user_agent' => ($_POST['user_agent'] ?? '') === 'desktop' ? 'desktop' : 'mobile',
+            'render_js' => !empty($_POST['render_js']) ? 1 : 0,
         ];
+        if ($data['name'] === '') {
+            $data['name'] = mb_substr(trim((string)($_POST['auto_name'] ?? '')), 0, 120);
+        }
         if (str_starts_with($data['compare_mode'], 'keyword') && $data['keyword'] === '') {
             flash('Įrašykite žodį ar frazę, kurios ieškoti', 'err');
             redirect('?view=edit' . ($id ? '&id=' . $id : ''));
@@ -167,7 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 redirect('./');
             }
             $cols = implode(', ', array_map(fn($k) => "$k = :$k", array_keys($data)));
-            $resetKeys = ['url', 'selector', 'compare_mode', 'keyword', 'ignore_numbers', 'ignore_regex'];
+            $resetKeys = ['url', 'selector', 'compare_mode', 'keyword', 'ignore_numbers', 'ignore_regex', 'headers', 'user_agent', 'render_js'];
             $reset = false;
             foreach ($resetKeys as $k) {
                 if ((string)$old[$k] !== (string)$data[$k]) {
@@ -175,7 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             if ($reset) {
-                $cols .= ', last_content = NULL, fail_count = 0';
+                $cols .= ", last_content = NULL, fail_count = 0, value_history = ''";
             }
             $st = db()->prepare("UPDATE watches SET $cols WHERE id = :id");
             $st->execute($data + ['id' => $id]);
@@ -202,6 +210,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('?view=watch&id=' . $id);
     }
 
+    if ($do === 'duplicate_watch') {
+        $w = get_watch((int)($_POST['id'] ?? 0));
+        if ($w) {
+            $copy = array_intersect_key($w, array_flip(['url', 'selector', 'compare_mode', 'keyword', 'number_dir', 'threshold',
+                'ignore_numbers', 'ignore_regex', 'interval_min', 'notify', 'tags', 'headers', 'user_agent', 'render_js']));
+            $copy['name'] = watch_title($w) . ' (kopija)';
+            $copy['active'] = 0;
+            $copy['created'] = time();
+            $cols = implode(', ', array_keys($copy));
+            $vals = implode(', ', array_map(fn($k) => ":$k", array_keys($copy)));
+            db()->prepare("INSERT INTO watches ($cols) VALUES ($vals)")->execute($copy);
+            flash('Nukopijuota (pristabdyta). Pakeiskite ką reikia ir išsaugokite.');
+            redirect('?view=edit&id=' . db()->lastInsertId());
+        }
+        redirect('./');
+    }
+
+    if ($do === 'mark_all_read') {
+        db()->exec('UPDATE watches SET unseen = 0');
+        redirect('./');
+    }
+
+    if ($do === 'import') {
+        $raw = is_uploaded_file($_FILES['file']['tmp_name'] ?? '') ? file_get_contents($_FILES['file']['tmp_name']) : '';
+        $data = json_decode((string)$raw, true);
+        $list = $data['watches'] ?? (is_array($data) && array_is_list($data) ? $data : null);
+        if (!is_array($list)) {
+            flash('Netinkamas failas (reikia WebWatch eksporto JSON)', 'err');
+            redirect('?view=settings#backup');
+        }
+        $allowed = ['name', 'url', 'selector', 'compare_mode', 'keyword', 'number_dir', 'threshold', 'ignore_numbers',
+            'ignore_regex', 'interval_min', 'notify', 'active', 'tags', 'headers', 'user_agent', 'render_js'];
+        $n = 0;
+        foreach ($list as $item) {
+            if (!is_array($item) || !preg_match('~^https?://~i', (string)($item['url'] ?? ''))) {
+                continue;
+            }
+            $row = array_intersect_key($item, array_flip($allowed));
+            $row = array_map(fn($v) => is_scalar($v) ? $v : '', $row);
+            if (!array_key_exists((string)($row['compare_mode'] ?? 'text'), compare_modes())) {
+                $row['compare_mode'] = 'text';
+            }
+            $row['created'] = time();
+            $cols = implode(', ', array_keys($row));
+            $vals = implode(', ', array_map(fn($k) => ":$k", array_keys($row)));
+            db()->prepare("INSERT INTO watches ($cols) VALUES ($vals)")->execute($row);
+            $n++;
+        }
+        flash("Importuota stebėjimų: $n");
+        redirect('./');
+    }
+
     if ($do === 'delete_watch') {
         db()->prepare('DELETE FROM watches WHERE id = ?')->execute([(int)($_POST['id'] ?? 0)]);
         flash('Ištrinta');
@@ -209,7 +269,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($do === 'save_settings') {
-        foreach (['email_to', 'email_from', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user'] as $k) {
+        $keys = [
+            'email' => ['email_to', 'email_from', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user'],
+            'channels' => ['tg_token', 'tg_chat', 'ntfy_server', 'ntfy_topic', 'ntfy_token', 'webhook_url'],
+            'general' => ['quiet_from', 'quiet_to', 'render_api'],
+        ];
+        $section = array_key_exists($_POST['section'] ?? '', $keys) ? $_POST['section'] : 'email';
+        foreach ($keys[$section] as $k) {
             set_setting($k, trim((string)($_POST[$k] ?? '')));
         }
         if (($_POST['smtp_pass'] ?? '') !== '') {
@@ -219,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             set_setting('smtp_pass', '');
         }
         flash('Nustatymai išsaugoti');
-        redirect('?view=settings#email');
+        redirect('?view=settings#' . $section);
     }
 
     if ($do === 'change_password') {
@@ -261,6 +327,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 /* ------------------------------------------------------------------ */
 
 switch ($view) {
+    case 'export':
+        $rows = db()->query('SELECT name, url, selector, compare_mode, keyword, number_dir, threshold, ignore_numbers, ignore_regex,
+            interval_min, notify, active, tags, headers, user_agent, render_js FROM watches ORDER BY id')->fetchAll();
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="webwatch-' . date('Y-m-d') . '.json"');
+        echo json_encode(['app' => 'WebWatch', 'version' => WW_VERSION, 'exported' => date('c'), 'watches' => $rows],
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
     case 'edit':
         view_edit($flash);
         break;
@@ -294,6 +368,7 @@ function page_start(string $title, bool $nav = false, string $active = ''): void
     <meta name="apple-mobile-web-app-title" content="WebWatch">
     <meta name="csrf" content="<?= h($csrf) ?>">
     <meta name="vapid" content="<?= $csrf ? h(vapid_keys()['public']) : '' ?>">
+    <meta name="unseen" content="<?= $csrf ? unseen_total() : 0 ?>">
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icons/icon-192.png">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -380,13 +455,39 @@ function view_list(?array $flash): void
             <a class="btn primary" href="?view=edit">＋ Pridėti puslapį</a>
         </div>
     <?php else: ?>
+        <?php
+        $allTags = [];
+        foreach ($watches as $w) {
+            foreach (tag_list((string)$w['tags']) as $t) {
+                $allTags[mb_strtolower($t)] = $t;
+            }
+        }
+        $unseen = array_sum(array_column($watches, 'unseen'));
+        ?>
         <div class="list-head">
             <span class="muted"><?= count($watches) ?> stebimi</span>
-            <button class="btn small ghost" data-check-all>↻ Tikrinti visus</button>
+            <span class="lh-btns">
+                <?php if ($unseen): ?>
+                    <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="mark_all_read"><button class="btn small ghost">✓ Viską perskaičiau</button></form>
+                <?php endif; ?>
+                <button class="btn small ghost" data-check-all>↻ Tikrinti visus</button>
+            </span>
         </div>
+        <?php if (count($watches) > 4 || $allTags): ?>
+            <input type="search" id="list-search" class="search" placeholder="🔍 Ieškoti…" autocomplete="off">
+            <?php if ($allTags): ?>
+                <div class="chips" id="tag-chips">
+                    <button type="button" class="chip on" data-tag="">Visi</button>
+                    <?php foreach ($allTags as $k => $t): ?>
+                        <button type="button" class="chip" data-tag="<?= h($k) ?>"><?= h($t) ?></button>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
         <div class="watch-list">
         <?php foreach ($watches as $w): ?>
-            <a class="watch-card <?= $w['active'] ? '' : 'paused' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>">
+            <a class="watch-card <?= $w['active'] ? '' : 'paused' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>"
+               data-search="<?= h(mb_strtolower(watch_title($w) . ' ' . $w['url'] . ' ' . $w['tags'])) ?>" data-tags="<?= h(mb_strtolower(implode('|', tag_list((string)$w['tags'])))) ?>">
                 <div class="wc-top">
                     <?= status_dot($w) ?>
                     <strong class="wc-title"><?= h(watch_title($w)) ?></strong>
@@ -398,6 +499,12 @@ function view_list(?array $flash): void
                     <span>Pokytis: <?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></span>
                     <span class="wc-check">Tikrinta: <?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></span>
                 </div>
+                <?php if ($w['compare_mode'] === 'number' && ($vh = json_decode((string)$w['value_history'], true))): ?>
+                    <div class="wc-value"><?= h(format_number((float)end($vh)[1])) ?></div>
+                <?php endif; ?>
+                <?php if ($w['tags'] !== ''): ?>
+                    <div class="wc-tags"><?php foreach (tag_list((string)$w['tags']) as $t): ?><span class="tag"><?= h($t) ?></span><?php endforeach; ?></div>
+                <?php endif; ?>
                 <?php if ($w['last_status'] === 'error'): ?>
                     <div class="wc-error">⚠️ <?= h($w['last_error']) ?></div>
                 <?php endif; ?>
@@ -418,8 +525,10 @@ function view_edit(?array $flash): void
     $w = $w ?: [
         'id' => 0, 'name' => '', 'url' => (string)($_GET['url'] ?? ''), 'selector' => '', 'compare_mode' => 'text',
         'keyword' => '', 'number_dir' => 'any', 'threshold' => 0, 'ignore_numbers' => 0, 'ignore_regex' => '',
-        'interval_min' => 60, 'notify' => 'auto', 'active' => 1,
+        'interval_min' => 60, 'notify' => 'push,fallback', 'active' => 1, 'tags' => '', 'headers' => '',
+        'user_agent' => 'mobile', 'render_js' => 0,
     ];
+    $channels = parse_channels((string)$w['notify']);
     page_start($id ? 'Redaguoti' : 'Naujas stebėjimas', true, 'edit');
     render_flash($flash);
     $scope = $w['selector'] !== '' ? 'element' : 'page';
@@ -436,6 +545,10 @@ function view_edit(?array $flash): void
             </label>
             <label>Pavadinimas <span class="muted">(nebūtina)</span>
                 <input type="text" name="name" id="f-name" value="<?= h($w['name']) ?>" placeholder="pvz. Naujienos, iPhone kaina">
+                <input type="hidden" name="auto_name" id="f-auto-name" value="">
+            </label>
+            <label>Žymos <span class="muted">(nebūtina, kableliais)</span>
+                <input type="text" name="tags" value="<?= h($w['tags']) ?>" placeholder="pvz. kainos, darbas" autocapitalize="off">
             </label>
         </div>
 
@@ -464,9 +577,9 @@ function view_edit(?array $flash): void
                     </label>
                 <?php endforeach; ?>
             </div>
-            <div data-show-mode="keyword_appear keyword_disappear">
-                <label>Žodis ar frazė <span class="muted">(kelios – atskirkite |)</span>
-                    <input type="text" name="keyword" id="f-keyword" value="<?= h($w['keyword']) ?>" placeholder="pvz. Yra sandėlyje">
+            <div data-show-mode="keyword_appear keyword_disappear added">
+                <label><span data-show-mode="keyword_appear keyword_disappear">Žodis ar frazė</span><span data-show-mode="added">Filtras: tik naujos eilutės su žodžiu <span class="muted">(nebūtina)</span></span> <span class="muted">– kelis atskirkite |</span>
+                    <input type="text" name="keyword" id="f-keyword" value="<?= h($w['keyword']) ?>" placeholder="pvz. Yra sandėlyje | In stock">
                 </label>
             </div>
             <div data-show-mode="number">
@@ -495,13 +608,17 @@ function view_edit(?array $flash): void
                     <?php endforeach; ?>
                 </select>
             </label>
-            <label>Pranešimas
-                <select name="notify">
-                    <?php foreach (notify_modes() as $k => $label): ?>
-                        <option value="<?= h($k) ?>" <?= $w['notify'] === $k ? 'selected' : '' ?>><?= h($label) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </label>
+            <fieldset class="channels">
+                <legend>Kur pranešti</legend>
+                <?php foreach (channel_labels() as $k => [$label, $needs]): ?>
+                    <?php $configured = $needs === '' || (string)setting($needs, '') !== ''; ?>
+                    <label class="check">
+                        <input type="checkbox" name="channels[]" value="<?= $k ?>" <?= in_array($k, $channels, true) ? 'checked' : '' ?>>
+                        <span><?= h($label) ?><?php if (!$configured): ?> <a class="muted small" href="?view=settings#channels">(nesukonfigūruota)</a><?php endif; ?></span>
+                    </label>
+                <?php endforeach; ?>
+                <p class="hint">Nieko nepažymėjus – pokyčiai tik išsaugomi istorijoje.</p>
+            </fieldset>
             <label class="check"><input type="checkbox" name="active" value="1" <?= $w['active'] ? 'checked' : '' ?>> Aktyvus</label>
             <details>
                 <summary>Papildomi nustatymai</summary>
@@ -509,6 +626,17 @@ function view_edit(?array $flash): void
                 <label>Ignoruoti tekstą (reguliarios išraiškos, po vieną eilutėje)
                     <textarea name="ignore_regex" id="f-ignore-regex" rows="3" placeholder="pvz. Atnaujinta:.*&#10;\d+ komentar\w+" autocapitalize="off" spellcheck="false"><?= h($w['ignore_regex']) ?></textarea>
                 </label>
+                <label>Naršyklės tipas
+                    <select name="user_agent" id="f-ua">
+                        <option value="mobile" <?= $w['user_agent'] === 'mobile' ? 'selected' : '' ?>>Telefonas (iPhone Safari)</option>
+                        <option value="desktop" <?= $w['user_agent'] === 'desktop' ? 'selected' : '' ?>>Kompiuteris (Chrome)</option>
+                    </select>
+                </label>
+                <label>HTTP antraštės / slapukai <span class="muted">(puslapiams, kuriems reikia prisijungti)</span>
+                    <textarea name="headers" id="f-headers" rows="3" placeholder="Cookie: sesija=abc123&#10;Authorization: Bearer ..." autocapitalize="off" spellcheck="false"><?= h($w['headers']) ?></textarea>
+                </label>
+                <label class="check"><input type="checkbox" name="render_js" id="f-render-js" value="1" <?= $w['render_js'] ? 'checked' : '' ?>>
+                    <span>Atvaizduoti JavaScript <span class="muted">(puslapiams, kurie turinį krauna per JS)<?= setting('render_api') ? '' : ' – reikia <a href="?view=settings#general">nustatyti paslaugą</a>' ?></span></span></label>
             </details>
         </div>
 
@@ -552,7 +680,8 @@ function view_watch(?array $flash): void
     if ($w['unseen'] > 0) {
         db()->prepare('UPDATE watches SET unseen = 0 WHERE id = ?')->execute([$id]);
     }
-    $st = db()->prepare('SELECT * FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
+    // Turinys nekraunamas visiems įrašams – skirtumai atsisiunčiami tik atidarius (api.php?action=diff).
+    $st = db()->prepare('SELECT id, created, summary, change_pct, old_content IS NOT NULL AS has_old FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
     $st->execute([$id]);
     $changes = $st->fetchAll();
     page_start(watch_title($w), true, 'watch');
@@ -572,7 +701,14 @@ function view_watch(?array $flash): void
         <div><small>Dažnis</small><b><?= h(interval_label((int)$w['interval_min'])) ?><?= $w['active'] ? '' : ' (pristabdyta)' ?></b></div>
         <div><small>Paskutinis tikrinimas</small><b><?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></b></div>
         <div><small>Paskutinis pokytis</small><b><?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></b></div>
+        <div><small>Pranešimai</small><b><?php
+            $ch = parse_channels((string)$w['notify']);
+            echo $ch ? h(implode(', ', array_map(fn($c) => trim(preg_replace('/^\S+\s/u', '', channel_labels()[$c][0])), $ch))) : 'išjungti';
+        ?></b></div>
     </div>
+    <?php if ($w['compare_mode'] === 'number'): ?>
+        <?= value_chart((string)$w['value_history']) ?>
+    <?php endif; ?>
     <?php if ($w['last_status'] === 'error'): ?>
         <div class="flash err">⚠️ <?= h($w['last_error']) ?> (<?= (int)$w['fail_count'] ?> k. iš eilės)</div>
     <?php endif; ?>
@@ -581,6 +717,10 @@ function view_watch(?array $flash): void
         <button class="btn primary" data-check-now="<?= $id ?>">↻ Tikrinti dabar</button>
         <a class="btn" href="?view=edit&id=<?= $id ?>">✎ Redaguoti</a>
         <button class="btn" data-toggle="<?= $id ?>"><?= $w['active'] ? '⏸ Pristabdyti' : '▶ Tęsti' ?></button>
+        <form method="post">
+            <?= csrf_field() ?><input type="hidden" name="do" value="duplicate_watch"><input type="hidden" name="id" value="<?= $id ?>">
+            <button class="btn">⧉ Kopijuoti</button>
+        </form>
         <form method="post" onsubmit="return confirm('Ištrinti šį stebėjimą?')">
             <?= csrf_field() ?><input type="hidden" name="do" value="delete_watch"><input type="hidden" name="id" value="<?= $id ?>">
             <button class="btn danger">🗑 Ištrinti</button>
@@ -592,14 +732,15 @@ function view_watch(?array $flash): void
         <p class="muted">Pokyčių dar neužfiksuota.</p>
     <?php else: ?>
         <?php foreach ($changes as $i => $c): ?>
-            <details class="card change" <?= $i === 0 ? 'open' : '' ?>>
+            <?php $hasDiff = in_array($w['compare_mode'], ['text', 'added', 'html'], true) && $c['has_old']; ?>
+            <details class="card change" <?= $i === 0 ? 'open' : '' ?> <?= $hasDiff ? 'data-diff="' . (int)$c['id'] . '"' : '' ?>>
                 <summary>
                     <span class="ch-date"><?= date('Y-m-d H:i', (int)$c['created']) ?></span>
                     <span class="ch-pct"><?= $c['change_pct'] > 0 ? h(number_format((float)$c['change_pct'], $c['change_pct'] < 1 ? 2 : 0, ',', '')) . ' %' : '' ?></span>
                     <span class="ch-sum"><?= h(mb_substr((string)$c['summary'], 0, 160)) ?></span>
                 </summary>
-                <?php if (in_array($w['compare_mode'], ['text', 'added', 'html'], true) && $c['old_content'] !== null): ?>
-                    <div class="diff"><?= diff_html(line_diff(comparable_text((string)$c['old_content'], $w), comparable_text((string)$c['new_content'], $w))) ?></div>
+                <?php if ($hasDiff): ?>
+                    <div class="diff"><div class="d-skip">Kraunama…</div></div>
                 <?php else: ?>
                     <pre class="summary"><?= h((string)$c['summary']) ?></pre>
                 <?php endif; ?>
@@ -672,6 +813,7 @@ function view_settings(?array $flash): void
         <form method="post" class="form">
             <?= csrf_field() ?>
             <input type="hidden" name="do" value="save_settings">
+            <input type="hidden" name="section" value="email">
             <label>Gavėjas (jūsų el. paštas)<input type="email" name="email_to" value="<?= h(setting('email_to', '')) ?>"></label>
             <label>Siuntėjas <span class="muted">(pvz. webwatch@jusu-domenas.lt)</span><input type="email" name="email_from" value="<?= h(setting('email_from', '')) ?>"></label>
             <details <?= setting('smtp_host') ? 'open' : '' ?>>
@@ -698,11 +840,81 @@ function view_settings(?array $flash): void
         </form>
     </section>
 
+    <section class="card" id="channels">
+        <h2>✈️ Kiti pranešimų kanalai</h2>
+        <p class="muted">Nebūtina. Pažymėkite juos konkretaus stebėjimo nustatymuose.</p>
+        <form method="post" class="form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="do" value="save_settings">
+            <input type="hidden" name="section" value="channels">
+            <details <?= setting('tg_token') ? 'open' : '' ?>>
+                <summary>Telegram</summary>
+                <ol class="hint-list">
+                    <li>Telegram'e parašykite <b>@BotFather</b> → <code>/newbot</code> → gausite raktą (token).</li>
+                    <li>Įklijuokite jį čia ir išsaugokite.</li>
+                    <li>Parašykite savo naujam botui bet ką, tada spauskite „Rasti chat ID“.</li>
+                </ol>
+                <label>Boto raktas (token)<input type="text" name="tg_token" value="<?= h(setting('tg_token', '')) ?>" placeholder="123456:ABC-DEF..." autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+                <label>Chat ID<input type="text" name="tg_chat" id="tg-chat" value="<?= h(setting('tg_chat', '')) ?>" autocapitalize="off"></label>
+                <div class="actions wrap-btns">
+                    <button type="button" class="btn small" data-tg-chats>Rasti chat ID</button>
+                    <button type="button" class="btn small" data-test-channel="telegram">Siųsti bandomąjį</button>
+                </div>
+            </details>
+            <details <?= setting('ntfy_topic') ? 'open' : '' ?>>
+                <summary>ntfy (alternatyvūs push per ntfy programėlę)</summary>
+                <p class="hint">Įdiekite <b>ntfy</b> programėlę (App Store / Google Play), prenumeruokite sugalvotą temą ir įrašykite ją čia. Temą rinkitės sunkiai atspėjamą.</p>
+                <label>Serveris<input type="url" name="ntfy_server" value="<?= h(setting('ntfy_server', '')) ?>" placeholder="https://ntfy.sh" autocapitalize="off"></label>
+                <label>Tema (topic)<input type="text" name="ntfy_topic" value="<?= h(setting('ntfy_topic', '')) ?>" placeholder="pvz. webwatch-<?= h(substr((string)setting('cron_token'), 0, 8)) ?>" autocapitalize="off"></label>
+                <label>Prieigos raktas <span class="muted">(jei serveris reikalauja)</span><input type="text" name="ntfy_token" value="<?= h(setting('ntfy_token', '')) ?>" autocapitalize="off" autocomplete="off"></label>
+                <button type="button" class="btn small" data-test-channel="ntfy">Siųsti bandomąjį</button>
+            </details>
+            <details <?= setting('webhook_url') ? 'open' : '' ?>>
+                <summary>Webhook (Discord, Slack, Home Assistant, n8n…)</summary>
+                <p class="hint">Discord ir Slack adresai atpažįstami automatiškai. Kitiems siunčiamas JSON: <code>{title, body, url, time}</code>.</p>
+                <label>Webhook adresas<input type="url" name="webhook_url" value="<?= h(setting('webhook_url', '')) ?>" placeholder="https://discord.com/api/webhooks/..." autocapitalize="off"></label>
+                <button type="button" class="btn small" data-test-channel="webhook">Siųsti bandomąjį</button>
+            </details>
+            <div class="actions"><button class="btn primary">Išsaugoti</button></div>
+        </form>
+    </section>
+
+    <section class="card" id="general">
+        <h2>🌙 Tylios valandos ir kita</h2>
+        <form method="post" class="form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="do" value="save_settings">
+            <input type="hidden" name="section" value="general">
+            <p class="hint">Tyliomis valandomis pranešimai kaupiami ir išsiunčiami joms pasibaigus (vienu suvestiniu, jei jų daug). Palikite tuščia, jei nereikia.</p>
+            <div class="row2">
+                <label>Nuo<input type="time" name="quiet_from" value="<?= h(setting('quiet_from', '')) ?>"></label>
+                <label>Iki<input type="time" name="quiet_to" value="<?= h(setting('quiet_to', '')) ?>"></label>
+            </div>
+            <label>JavaScript atvaizdavimo paslauga <span class="muted">(nebūtina)</span>
+                <input type="text" name="render_api" value="<?= h(setting('render_api', '')) ?>" placeholder="https://app.scrapingbee.com/api/v1/?api_key=RAKTAS&render_js=true&url={url}" autocapitalize="off" spellcheck="false">
+            </label>
+            <p class="hint">Hostinger negali paleisti naršyklės, todėl puslapiams, kurie turinį krauna per JavaScript, galima naudoti išorinę paslaugą (ScrapingBee, ScraperAPI, Browserless ir pan. – dauguma turi nemokamą planą). Įrašykite adresą su <code>{url}</code> vietoje stebimo puslapio ir stebėjime pažymėkite „Atvaizduoti JavaScript“.</p>
+            <div class="actions"><button class="btn primary">Išsaugoti</button></div>
+        </form>
+    </section>
+
+    <section class="card" id="backup">
+        <h2>💾 Atsarginė kopija</h2>
+        <p class="muted">Eksportuojami visi stebėjimai su nustatymais (be istorijos). Importuojant jie pridedami prie esamų.</p>
+        <div class="actions wrap-btns">
+            <a class="btn" href="?view=export">⬇ Eksportuoti (JSON)</a>
+            <form method="post" enctype="multipart/form-data" class="import-form">
+                <?= csrf_field() ?><input type="hidden" name="do" value="import">
+                <label class="btn">⬆ Importuoti<input type="file" name="file" accept=".json,application/json" hidden onchange="this.form.submit()"></label>
+            </form>
+        </div>
+    </section>
+
     <section class="card" id="cron">
         <h2>⏰ Automatinis tikrinimas (cron)</h2>
         <?php $last = (int)setting('cron_last_run', '0'); ?>
         <p>Paskutinį kartą vykdyta: <b><?= $last ? h(date('Y-m-d H:i:s', $last)) . ' (' . h(human_time($last)) . ')' : 'niekada' ?></b></p>
-        <p class="hint">Hostinger hPanel → <b>Advanced → Cron Jobs</b> → pasirinkite „Custom“, dažnį <b>kas 5 minutes</b> (<code>*/5 * * * *</code>) ir įrašykite komandą:</p>
+        <p class="hint">Hostinger hPanel → <b>Advanced → Cron Jobs</b> → pasirinkite „Custom“, dažnį <b>kas 5 minutes</b> (<code>*/5 * * * *</code>; jei naudosite tikrinimą „kas minutę“ – <code>* * * * *</code>) ir įrašykite komandą:</p>
         <label>PHP komanda (rekomenduojama)
             <input type="text" readonly value="/usr/bin/php <?= h($cronPath) ?>" class="mono copy" onclick="this.select()">
         </label>
@@ -741,4 +953,50 @@ function view_settings(?array $flash): void
     <p class="center muted small">WebWatch <?= WW_VERSION ?></p>
     <?php
     page_end();
+}
+
+/** SVG grafikas skaičiaus (kainos) istorijai. */
+function value_chart(string $json): string
+{
+    $h = json_decode($json, true);
+    if (!is_array($h) || count($h) < 2) {
+        return '';
+    }
+    $h[] = [time(), end($h)[1]]; // dabartinė reikšmė iki šiandien
+    $W = 600;
+    $H = 170;
+    $pad = [14, 12, 22, 12]; // viršus, dešinė, apačia, kairė
+    $t0 = $h[0][0];
+    $t1 = max($t0 + 1, end($h)[0]);
+    $vals = array_column($h, 1);
+    $min = min($vals);
+    $max = max($vals);
+    if ($max - $min < 0.000001) {
+        $min -= 1;
+        $max += 1;
+    }
+    $x = fn($t) => $pad[3] + ($t - $t0) / ($t1 - $t0) * ($W - $pad[1] - $pad[3]);
+    $y = fn($v) => $pad[0] + ($max - $v) / ($max - $min) * ($H - $pad[0] - $pad[2]);
+    $pts = [];
+    $prevY = null;
+    foreach ($h as [$t, $v]) {
+        if ($prevY !== null) {
+            $pts[] = round($x($t), 1) . ',' . $prevY; // laiptinė linija – kaina galioja iki kito pokyčio
+        }
+        $prevY = round($y($v), 1);
+        $pts[] = round($x($t), 1) . ',' . $prevY;
+    }
+    $line = implode(' ', $pts);
+    $area = $line . ' ' . round($x($t1), 1) . ',' . ($H - $pad[2]) . ' ' . $pad[3] . ',' . ($H - $pad[2]);
+    $dots = '';
+    foreach (array_slice($h, 0, -1) as [$t, $v]) {
+        $dots .= '<circle cx="' . round($x($t), 1) . '" cy="' . round($y($v), 1) . '" r="3.5"><title>'
+            . h(date('Y-m-d H:i', (int)$t) . ' — ' . format_number((float)$v)) . '</title></circle>';
+    }
+    return '<div class="card chart"><div class="chart-head"><span>Mažiausia <b>' . h(format_number(min($vals))) . '</b></span>'
+        . '<span>Didžiausia <b>' . h(format_number(max($vals))) . '</b></span>'
+        . '<span>Dabar <b>' . h(format_number((float)end($vals))) . '</b></span></div>'
+        . '<svg viewBox="0 0 ' . $W . ' ' . $H . '" role="img" aria-label="Reikšmės istorija">'
+        . '<polygon class="c-area" points="' . $area . '"/><polyline class="c-line" points="' . $line . '"/>' . $dots . '</svg>'
+        . '<div class="chart-axis"><span>' . date('Y-m-d', (int)$t0) . '</span><span>' . date('Y-m-d', (int)$t1) . '</span></div></div>';
 }

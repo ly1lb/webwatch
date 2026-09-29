@@ -69,8 +69,14 @@ try {
                 'ignore_numbers' => !empty($input['ignore_numbers']),
                 'ignore_regex' => (string)($input['ignore_regex'] ?? ''),
                 'keyword' => (string)($input['keyword'] ?? ''),
+                'headers' => (string)($input['headers'] ?? ''),
+                'user_agent' => (string)($input['user_agent'] ?? 'mobile'),
+                'render_js' => !empty($input['render_js']),
             ];
-            $f = fetch_url($w['url']);
+            if (!preg_match('~^https?://~i', $w['url'])) {
+                out(['ok' => false, 'error' => 'Įrašykite adresą (https://...)']);
+            }
+            $f = fetch_for_watch($w);
             if (!$f['ok']) {
                 out(['ok' => false, 'error' => $f['error']]);
             }
@@ -85,6 +91,9 @@ try {
                 $info = $n === null ? 'Skaičius nerastas!' : 'Rastas skaičius: ' . format_number($n);
             } elseif (str_starts_with($w['compare_mode'], 'keyword')) {
                 $info = keyword_found($cmp, $w['keyword']) ? 'Frazė šiuo metu RASTA' : 'Frazė šiuo metu NERASTA';
+            } elseif ($w['compare_mode'] === 'added' && trim($w['keyword']) !== '') {
+                $n = count(array_filter(explode("\n", $cmp), fn($l) => keyword_found($l, $w['keyword'])));
+                $info = "Eilučių su filtru: $n";
             }
             $title = '';
             if (preg_match('~<title[^>]*>(.*?)</title>~is', $f['body'], $m)) {
@@ -106,6 +115,50 @@ try {
             }
             $r = run_check($w, true);
             out($r);
+
+        case 'diff':
+            $st = db()->prepare('SELECT c.*, w.ignore_numbers, w.ignore_regex FROM changes c JOIN watches w ON w.id = c.watch_id WHERE c.id = ?');
+            $st->execute([(int)($input['id'] ?? 0)]);
+            $c = $st->fetch();
+            if (!$c) {
+                out(['ok' => false, 'error' => 'Nerasta']);
+            }
+            out(['ok' => true, 'html' => diff_html(line_diff(comparable_text((string)$c['old_content'], $c), comparable_text((string)$c['new_content'], $c)))]);
+
+        case 'test_channel':
+            $ch = (string)($input['channel'] ?? '');
+            $fn = ['telegram' => 'send_telegram', 'ntfy' => 'send_ntfy', 'webhook' => 'send_webhook'][$ch] ?? null;
+            if (!$fn) {
+                out(['ok' => false, 'error' => 'Nežinomas kanalas']);
+            }
+            $r = $fn('✅ WebWatch veikia', 'Bandomasis pranešimas ' . date('H:i:s'), app_url());
+            out(['ok' => $r['ok'], 'error' => $r['error']]);
+
+        case 'tg_chats':
+            $token = trim((string)setting('tg_token', ''));
+            if ($token === '') {
+                out(['ok' => false, 'error' => 'Pirmiausia išsaugokite boto raktą']);
+            }
+            $raw = @file_get_contents("https://api.telegram.org/bot$token/getUpdates", false,
+                stream_context_create(['http' => ['timeout' => 15, 'ignore_errors' => true]]));
+            $data = json_decode((string)$raw, true);
+            if (empty($data['ok'])) {
+                out(['ok' => false, 'error' => 'Telegram: ' . ($data['description'] ?? 'neteisingas raktas')]);
+            }
+            $chats = [];
+            foreach ($data['result'] as $u) {
+                $c = $u['message']['chat'] ?? $u['channel_post']['chat'] ?? $u['my_chat_member']['chat'] ?? null;
+                if ($c) {
+                    $chats[(string)$c['id']] = trim(($c['title'] ?? '') . ' ' . ($c['first_name'] ?? '') . ' ' . ($c['last_name'] ?? '')) ?: (string)$c['id'];
+                }
+            }
+            if (!$chats) {
+                out(['ok' => false, 'error' => 'Parašykite savo botui Telegram programėlėje (bet ką), tada bandykite vėl']);
+            }
+            if (count($chats) === 1) {
+                set_setting('tg_chat', (string)array_key_first($chats));
+            }
+            out(['ok' => true, 'chats' => $chats, 'saved' => count($chats) === 1]);
 
         case 'toggle':
             $w = get_watch((int)($input['id'] ?? 0));

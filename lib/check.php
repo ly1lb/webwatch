@@ -17,20 +17,14 @@ function compare_modes(): array
     ];
 }
 
-function notify_modes(): array
+function keyword_list(string $keywords): array
 {
-    return [
-        'auto' => 'Push, o jei nepavyksta – el. paštu',
-        'push' => 'Tik push pranešimas',
-        'email' => 'Tik el. paštas',
-        'both' => 'Push ir el. paštas',
-        'none' => 'Nesiųsti (tik istorija)',
-    ];
+    return array_values(array_filter(array_map('trim', preg_split('/\R|\|/', $keywords)), fn($k) => $k !== ''));
 }
 
 function keyword_found(string $text, string $keywords): bool
 {
-    foreach (preg_split('/\R|\|/', $keywords) as $k) {
+    foreach (keyword_list($keywords) as $k) {
         $k = trim($k);
         if ($k !== '' && mb_stripos($text, $k) !== false) {
             return true;
@@ -45,7 +39,7 @@ function keyword_found(string $text, string $keywords): bool
 function run_check(array $w, bool $sendNotify = true): array
 {
     $now = time();
-    $fetch = fetch_url((string)$w['url']);
+    $fetch = fetch_for_watch($w);
     if (!$fetch['ok']) {
         return record_failure($w, $fetch['error'], $sendNotify);
     }
@@ -85,6 +79,7 @@ function run_check(array $w, bool $sendNotify = true): array
             if ($n === null) {
                 return record_failure($w, 'Elemente nerastas skaičius', $sendNotify);
             }
+            $valueHistory = append_value_history((string)($w['value_history'] ?? ''), $now, $n);
             $o = $first ? null : parse_number((string)$old);
             if ($o !== null && abs($n - $o) > 0.000001) {
                 $rel = $o != 0.0 ? ($n - $o) / abs($o) * 100 : 100.0;
@@ -109,7 +104,9 @@ function run_check(array $w, bool $sendNotify = true): array
             }
             $ops = line_diff(comparable_text((string)$old, $w), comparable_text($new, $w));
             if ($mode === 'added') {
-                $ops = array_values(array_filter($ops, fn($op) => $op[0] !== '-'));
+                $kw = (string)$w['keyword'];
+                $ops = array_values(array_filter($ops, fn($op) => $op[0] === '='
+                    || ($op[0] === '+' && (trim($kw) === '' || keyword_found($op[1], $kw)))));
             }
             $pct = change_percent($ops);
             if ($pct > 0) {
@@ -125,6 +122,10 @@ function run_check(array $w, bool $sendNotify = true): array
     $db = db();
     $fields = 'last_check = ?, last_status = ?, last_error = \'\', fail_count = 0';
     $params = [$now, 'ok'];
+    if (isset($valueHistory)) {
+        $fields .= ', value_history = ?';
+        $params[] = $valueHistory;
+    }
     if ($updateBaseline || $first) {
         $fields .= ', last_content = ?';
         $params[] = $new;
@@ -141,6 +142,10 @@ function run_check(array $w, bool $sendNotify = true): array
     $db->prepare("UPDATE watches SET $fields WHERE id = ?")->execute($params);
 
     $sent = null;
+    if ($sendNotify && (int)$w['fail_count'] >= WW_FAILS_BEFORE_ALERT && !$changed) {
+        notify_user((string)$w['notify'], '✅ ' . watch_title($w) . ': vėl veikia',
+            'Puslapį vėl pavyksta patikrinti.', app_url() . '?view=watch&id=' . $w['id'], 'watch-err-' . $w['id']);
+    }
     if ($changed && $sendNotify) {
         $sent = notify_user(
             (string)$w['notify'],
@@ -166,7 +171,7 @@ function record_failure(array $w, string $error, bool $sendNotify): array
     $fails = (int)$w['fail_count'] + 1;
     db()->prepare("UPDATE watches SET last_check = ?, last_status = 'error', last_error = ?, fail_count = ? WHERE id = ?")
         ->execute([time(), $error, $fails, $w['id']]);
-    if ($sendNotify && $fails === WW_FAILS_BEFORE_ALERT && $w['notify'] !== 'none') {
+    if ($sendNotify && $fails === WW_FAILS_BEFORE_ALERT) {
         notify_user(
             (string)$w['notify'],
             '⚠️ ' . watch_title($w) . ': nepavyksta patikrinti',
@@ -185,4 +190,16 @@ function due_watches(): array
     $st->bindValue(1, time(), PDO::PARAM_INT); // kitaip SQLite lygina kaip tekstą
     $st->execute();
     return $st->fetchAll();
+}
+
+/** Skaičių istorija grafikui: JSON [[laikas, reikšmė], ...], įrašoma tik pasikeitus. */
+function append_value_history(string $json, int $ts, float $value): string
+{
+    $h = json_decode($json, true);
+    $h = is_array($h) ? $h : [];
+    $last = end($h);
+    if (!$last || abs((float)$last[1] - $value) > 0.000001) {
+        $h[] = [$ts, $value];
+    }
+    return json_encode(array_slice($h, -300));
 }

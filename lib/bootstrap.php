@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.0.0');
+define('WW_VERSION', '1.1.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -95,6 +95,15 @@ function migrate(PDO $pdo): void
             last_ok INTEGER,
             last_error TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created INTEGER NOT NULL,
+            channels TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            url TEXT NOT NULL,
+            tag TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created INTEGER NOT NULL,
@@ -102,6 +111,28 @@ function migrate(PDO $pdo): void
             message TEXT NOT NULL
         );
     ");
+
+    // Stulpeliai, pridėti vėlesnėse versijose (senos DB atnaujinamos automatiškai).
+    add_columns($pdo, 'watches', [
+        'tags' => "TEXT NOT NULL DEFAULT ''",
+        'headers' => "TEXT NOT NULL DEFAULT ''",
+        'user_agent' => "TEXT NOT NULL DEFAULT 'mobile'",
+        'render_js' => 'INTEGER NOT NULL DEFAULT 0',
+        'value_history' => "TEXT NOT NULL DEFAULT ''",
+    ]);
+}
+
+function add_columns(PDO $pdo, string $table, array $cols): void
+{
+    $have = [];
+    foreach ($pdo->query("PRAGMA table_info($table)") as $c) {
+        $have[$c['name']] = true;
+    }
+    foreach ($cols as $name => $def) {
+        if (!isset($have[$name])) {
+            $pdo->exec("ALTER TABLE $table ADD COLUMN $name $def");
+        }
+    }
 }
 
 function setting(string $key, ?string $default = null): ?string
@@ -211,6 +242,8 @@ function interval_label(int $min): string
 function interval_options(): array
 {
     return [
+        1 => 'kas minutę',
+        2 => 'kas 2 min.',
         5 => 'kas 5 min.',
         10 => 'kas 10 min.',
         15 => 'kas 15 min.',
@@ -288,4 +321,15 @@ function ensure_secrets(): void
         set_setting('cron_token', bin2hex(random_bytes(16)));
     }
     vapid_keys();
+}
+
+function normalize_tags(string $tags): string
+{
+    $list = array_unique(array_filter(array_map(fn($t) => mb_substr(trim($t), 0, 30), preg_split('/[,;]+/', $tags))));
+    return implode(', ', array_slice($list, 0, 10));
+}
+
+function tag_list(string $tags): array
+{
+    return array_values(array_filter(array_map('trim', explode(',', $tags))));
 }

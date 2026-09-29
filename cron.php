@@ -32,6 +32,10 @@ if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
 }
 
 set_setting('cron_last_run', (string)$started);
+$flushed = flush_queue();
+if ($flushed) {
+    echo "Išsiųsti atidėti pranešimai: $flushed\n";
+}
 $watches = due_watches();
 $checked = 0;
 $changed = 0;

@@ -105,7 +105,7 @@ code { background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; wor
 .form label, .card > label, [data-show-mode] label, [data-show-scope] label, details label {
   display: block; font-weight: 600; font-size: .92rem; margin: 0 0 12px;
 }
-input[type=text], input[type=url], input[type=email], input[type=password], input[type=number], select, textarea {
+input[type=text], input[type=url], input[type=email], input[type=password], input[type=number], input[type=time], input[type=search], select, textarea {
   display: block; width: 100%; margin-top: 6px;
   font: inherit; font-size: 16px; font-weight: 400; color: var(--text);
   background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
@@ -216,6 +216,29 @@ pre.content, pre.summary, .test-result pre {
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { background: var(--err); }
 .toast.ok { background: #15803d; }
+
+.lh-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.lh-btns form { margin: 0; }
+input.search { margin: 0 0 10px; background: var(--card); }
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; -webkit-overflow-scrolling: touch; }
+.chip { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 99px; padding: 5px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wc-tags { margin: 8px 0 0 18px; display: flex; gap: 5px; flex-wrap: wrap; }
+.tag { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 1px 7px; font-size: .75rem; font-weight: 600; }
+.wc-value { margin: 6px 0 0 18px; font-size: 1.25rem; font-weight: 700; }
+.channels { border: 0; padding: 0; margin: 0 0 12px; }
+.channels legend { font-weight: 600; font-size: .92rem; margin-bottom: 8px; padding: 0; }
+.channels label.check { margin-bottom: 8px; }
+.hint-list { font-size: .85rem; color: var(--muted); padding-left: 20px; margin: 0 0 12px; }
+.card details { margin-bottom: 10px; }
+.import-form { margin: 0; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .c-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.chart .c-area { fill: var(--accent); opacity: .1; }
+.chart circle { fill: var(--card); stroke: var(--accent); stroke-width: 2; }
+.chart-head { display: flex; justify-content: space-between; gap: 8px; font-size: .8rem; color: var(--muted); margin-bottom: 6px; }
+.chart-head b { color: var(--text); font-size: .95rem; }
+.chart-axis { display: flex; justify-content: space-between; font-size: .72rem; color: var(--muted); margin-top: 2px; }
 
 [hidden] { display: none !important; }
 

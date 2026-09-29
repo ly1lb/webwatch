@@ -16,6 +16,16 @@ Savas svetainių pokyčių stebėjimo įrankis (kaip „Web Alert“ Android'e),
 - **Jautrumas (tikslumas)** – pranešti tik kai pasikeičia ≥ X % turinio; galima ignoruoti skaičius (datas, skaitliukus) ir tekstą pagal reguliarias išraiškas.
 - **Dažnis** – nuo kas 5 min. iki kartą per parą, atskirai kiekvienam puslapiui.
 - **Pranešimai:** Web Push (iPhone, Android, kompiuteris). Jei push nepavyksta ar neįjungtas – automatiškai el. paštu. Arba abu.
+- **Kanalai:** push, el. paštas, **Telegram**, **ntfy**, **Discord / Slack / bet koks webhook** – pasirenkama kiekvienam stebėjimui atskirai.
+- **Tylios valandos** – naktį pranešimai kaupiami ir išsiunčiami ryte (vienu suvestiniu, jei jų daug).
+- **Kainų istorijos grafikas** (mažiausia / didžiausia / dabartinė kaina).
+- **Naujienų filtras** – pranešti tik apie naujas eilutes, kuriose yra nurodytas žodis.
+- **JSON API** stebėjimas (kelias, pvz. `$.items[0].price`).
+- **Puslapiai su prisijungimu** – savi slapukai (Cookie) ir HTTP antraštės; telefono arba kompiuterio naršyklės tipas.
+- **JavaScript puslapiai** – per išorinę atvaizdavimo paslaugą (ScrapingBee ir pan., nebūtina).
+- **Žymos, paieška**, „Viską perskaičiau“, stebėjimo kopijavimas, **eksportas / importas (JSON)**.
+- Neperskaitytų pokyčių skaičius ant programėlės ikonos, automatinis atsinaujinimas grįžus į programėlę.
+- Pranešimas „vėl veikia“, kai puslapis po klaidų vėl pasiekiamas; pakartotinis bandymas dėl tinklo klaidų.
 - Pokyčių istorija su spalvotu skirtumų (diff) rodymu.
 - Įspėja, jei puslapio nepavyksta patikrinti 3 kartus iš eilės.
 - Veikia kaip programėlė (PWA) – tamsus režimas, pritaikyta telefonui.

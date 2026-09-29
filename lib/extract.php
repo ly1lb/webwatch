@@ -352,7 +352,8 @@ function node_html(DOMNode $node): string
     $clone = $node->cloneNode(true);
     if ($clone instanceof DOMElement) {
         $xp = new DOMXPath($node->ownerDocument);
-        foreach (iterator_to_array($xp->query('.//script|.//style|.//noscript|.//comment()', $clone) ?: []) as $n) {
+        $list = $xp->query('.//script|.//style|.//noscript|.//comment()', $clone);
+        foreach ($list ? iterator_to_array($list) : [] as $n) {
             $n->parentNode?->removeChild($n);
         }
     }
@@ -367,6 +368,13 @@ function node_html(DOMNode $node): string
  */
 function extract_content(string $html, array $w): array
 {
+    $trim = ltrim($html);
+    if ($trim !== '' && ($trim[0] === '{' || $trim[0] === '[')) {
+        $data = json_decode($trim, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
+            return extract_json($data, trim((string)($w['selector'] ?? '')));
+        }
+    }
     $doc = load_html($html);
     $xp = new DOMXPath($doc);
     $selector = trim((string)($w['selector'] ?? ''));
@@ -465,4 +473,82 @@ function format_number(float $n): string
 {
     $dec = abs($n - round($n)) < 0.00001 ? 0 : 2;
     return number_format($n, $dec, ',', ' ');
+}
+
+/* ------------------------------------------------------------------ */
+/* JSON API                                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * JSON atsakymas. Parinkiklis – kelias: $.items[0].price, data.list[*].title, arba tuščias (viskas).
+ */
+function extract_json(array $data, string $path): array
+{
+    $values = $path === '' ? [$data] : json_path($data, $path);
+    if (!$values) {
+        return ['ok' => false, 'content' => '', 'count' => 0, 'error' => 'JSON kelias nerastas: ' . $path];
+    }
+    $lines = [];
+    foreach ($values as $v) {
+        if (is_array($v)) {
+            json_flatten($v, '', $lines);
+        } else {
+            $lines[] = json_scalar($v);
+        }
+    }
+    return ['ok' => true, 'content' => normalize_text(implode("\n", $lines)), 'count' => count($values), 'error' => ''];
+}
+
+function json_path(array $data, string $path): array
+{
+    $path = preg_replace('/^\$\.?/', '', trim($path));
+    preg_match_all('/([^.\[\]]+)|\[(\*|-?\d+|"[^"]*"|\'[^\']*\')\]/', $path, $m, PREG_SET_ORDER);
+    $cur = [$data];
+    foreach ($m as $tok) {
+        $key = $tok[1] !== '' ? $tok[1] : trim($tok[2], '"\'');
+        $next = [];
+        foreach ($cur as $node) {
+            if (!is_array($node)) {
+                continue;
+            }
+            if ($key === '*') {
+                foreach ($node as $child) {
+                    $next[] = $child;
+                }
+            } elseif (preg_match('/^-?\d+$/', $key) && array_is_list($node)) {
+                $i = (int)$key;
+                $i = $i < 0 ? count($node) + $i : $i;
+                if (array_key_exists($i, $node)) {
+                    $next[] = $node[$i];
+                }
+            } elseif (array_key_exists($key, $node)) {
+                $next[] = $node[$key];
+            }
+        }
+        $cur = $next;
+    }
+    return $cur;
+}
+
+function json_flatten(array $a, string $prefix, array &$lines): void
+{
+    foreach ($a as $k => $v) {
+        $p = $prefix === '' ? (string)$k : (is_int($k) ? "{$prefix}[$k]" : "$prefix.$k");
+        if (is_array($v)) {
+            json_flatten($v, $p, $lines);
+        } else {
+            $lines[] = $p . ': ' . json_scalar($v);
+        }
+    }
+}
+
+function json_scalar($v): string
+{
+    if ($v === null) {
+        return 'null';
+    }
+    if (is_bool($v)) {
+        return $v ? 'true' : 'false';
+    }
+    return (string)$v;
 }

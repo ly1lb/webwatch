@@ -20,10 +20,25 @@ header('Cache-Control: no-store');
 header("Content-Security-Policy: sandbox allow-scripts; script-src 'nonce-$nonce'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri *");
 header('Referrer-Policy: no-referrer');
 
-$f = fetch_url($url);
+$f = fetch_for_watch([
+    'url' => $url,
+    'headers' => (string)($_GET['h'] ?? ''),
+    'user_agent' => (string)($_GET['ua'] ?? 'mobile'),
+    'render_js' => !empty($_GET['js']),
+]);
 if (!$f['ok'] && $f['body'] === '') {
     echo '<!doctype html><meta charset="utf-8"><body style="font:16px -apple-system,sans-serif;padding:24px;color:#b91c1c">'
         . h($f['error']) . '</body>';
+    exit;
+}
+
+$trim = ltrim($f['body']);
+if ($trim !== '' && ($trim[0] === '{' || $trim[0] === '[') && is_array($json = json_decode($trim, true))) {
+    $lines = [];
+    json_flatten($json, '', $lines);
+    echo '<!doctype html><meta charset="utf-8"><body style="font:14px ui-monospace,Menlo,monospace;padding:16px;white-space:pre-wrap;word-break:break-all">'
+        . '<b style="font-family:-apple-system,sans-serif">Tai JSON API. Įrašykite kelią laukelyje, pvz. <code>$.items[0].price</code> arba <code>data.list[*].title</code>:</b>' . "\n\n"
+        . h(implode("\n", array_slice($lines, 0, 2000))) . '</body>';
     exit;
 }
 

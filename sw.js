@@ -14,7 +14,11 @@ self.addEventListener('push', function (event) {
     renotify: true,
     data: { url: data.url || './' }
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  var jobs = [self.registration.showNotification(title, options)];
+  if (typeof data.badge === 'number' && self.navigator && 'setAppBadge' in self.navigator) {
+    jobs.push(self.navigator.setAppBadge(data.badge).catch(function () {}));
+  }
+  event.waitUntil(Promise.all(jobs));
 });
 
 self.addEventListener('notificationclick', function (event) {

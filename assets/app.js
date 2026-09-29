@@ -209,12 +209,12 @@
       var mode = (form.querySelector('input[name="compare_mode"]:checked') || {}).value;
       $$('[data-show-scope]').forEach(function (el) { el.hidden = el.dataset.showScope !== scope; });
       $$('[data-show-mode]').forEach(function (el) { el.hidden = el.dataset.showMode.split(' ').indexOf(mode) < 0; });
+      // Privalomi laukai tik tada, kai jie matomi (kitaip naršyklė neleistų išsaugoti)
+      $('#f-selector').required = scope === 'element';
+      $('#f-keyword').required = mode === 'keyword_appear' || mode === 'keyword_disappear';
     };
     form.addEventListener('change', syncVisibility);
-    form.addEventListener('submit', function () {
-      var n = $('#f-name');
-      if (!n.value.trim() && n.dataset.auto) n.value = n.dataset.auto;
-    });
+    $('#f-url').addEventListener('change', function () { $('#f-auto-name').value = ''; });
     syncVisibility();
 
     var thr = $('#f-threshold');
@@ -227,6 +227,9 @@
       busy(btn, true, 'Kraunama…');
       api('test_extract', {
         url: normUrl($('#f-url').value),
+        headers: $('#f-headers').value,
+        user_agent: $('#f-ua').value,
+        render_js: $('#f-render-js').checked,
         selector: scope === 'element' ? $('#f-selector').value : '',
         compare_mode: form.querySelector('input[name="compare_mode"]:checked').value,
         keyword: $('#f-keyword').value,
@@ -248,7 +251,7 @@
         pre.textContent = r.content || '(tuščia)';
         box.appendChild(head);
         box.appendChild(pre);
-        if (r.title) { $('#f-name').placeholder = r.title; $('#f-name').dataset.auto = r.title; }
+        if (r.title) { $('#f-name').placeholder = r.title; $('#f-auto-name').value = r.title; }
         if (/JavaScript|enable js|įjunkite/i.test(r.content) && r.length < 400) {
           var w = document.createElement('div');
           w.className = 'flash warn';
@@ -283,7 +286,10 @@
       last = null;
       info.textContent = 'Kraunamas puslapis…';
       btns.forEach(function (b) { if (b.dataset.picker !== 'close') b.disabled = true; });
-      frame.src = 'preview.php?url=' + encodeURIComponent(url);
+      var q = 'preview.php?url=' + encodeURIComponent(url) + '&ua=' + encodeURIComponent($('#f-ua').value);
+      if ($('#f-render-js').checked) q += '&js=1';
+      if ($('#f-headers').value.trim()) q += '&h=' + encodeURIComponent($('#f-headers').value);
+      frame.src = q;
       picker.hidden = false;
       document.body.classList.add('noscroll');
     });
@@ -324,7 +330,8 @@
         el.checked = true;
         el.dispatchEvent(new Event('change', { bubbles: true }));
         close();
-        toast('Elementas pasirinktas. Spauskite „Išbandyti“, kad pamatytumėte turinį.', 'ok');
+        $('#test-extract').click(); // iškart parodome, ką matys serveris
+        $('#test-extract').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else if (frame.contentWindow) {
         frame.contentWindow.postMessage({ type: 'ww-cmd', cmd: cmd }, '*');
       }
@@ -336,4 +343,80 @@
       document.body.classList.remove('noscroll');
     }
   }
+
+  /* ---------------- Pokyčių skirtumai (kraunami atidarius) ---------------- */
+
+  function loadDiff(d) {
+    if (!d.dataset.diff || d.dataset.loaded) return;
+    d.dataset.loaded = '1';
+    api('diff', { id: +d.dataset.diff }).then(function (r) {
+      var box = d.querySelector('.diff');
+      if (r.ok) box.innerHTML = r.html; // HTML sugeneruotas serveryje, turinys ištrauktas su h()
+      else box.textContent = r.error || 'Klaida';
+    });
+  }
+  $$('details[data-diff]').forEach(function (d) {
+    if (d.open) loadDiff(d);
+    d.addEventListener('toggle', function () { if (d.open) loadDiff(d); });
+  });
+
+  /* ---------------- Paieška ir žymos sąraše ---------------- */
+
+  var search = $('#list-search');
+  var activeTag = '';
+  function filterList() {
+    var q = search ? search.value.trim().toLowerCase() : '';
+    $$('.watch-card').forEach(function (c) {
+      var okQ = !q || c.dataset.search.indexOf(q) >= 0;
+      var okT = !activeTag || c.dataset.tags.split('|').indexOf(activeTag) >= 0;
+      c.hidden = !(okQ && okT);
+    });
+  }
+  if (search) search.addEventListener('input', filterList);
+  $$('#tag-chips .chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      activeTag = chip.dataset.tag;
+      $$('#tag-chips .chip').forEach(function (c) { c.classList.toggle('on', c === chip); });
+      filterList();
+    });
+  });
+
+  /* ---------------- Kanalų nustatymai ---------------- */
+
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-test-channel], [data-tg-chats]') : null;
+    if (!t) return;
+    e.preventDefault();
+    busy(t, true, 'Palaukite…');
+    if (t.hasAttribute('data-tg-chats')) {
+      api('tg_chats').then(function (r) {
+        busy(t, false);
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        var ids = Object.keys(r.chats);
+        $('#tg-chat').value = ids[0];
+        toast(r.saved ? 'Chat ID rastas ir išsaugotas ✅' : 'Rasti keli pokalbiai: ' + ids.map(function (k) { return k + ' (' + r.chats[k] + ')'; }).join(', ') + ' – pasirinkite ir išsaugokite', 'ok');
+      });
+    } else {
+      api('test_channel', { channel: t.dataset.testChannel }).then(function (r) {
+        busy(t, false);
+        toast(r.ok ? 'Išsiųsta ✅' : (r.error || 'Klaida') + ' (ar išsaugojote nustatymus?)', r.ok ? 'ok' : 'err');
+      });
+    }
+  });
+
+  /* ---------------- Ženkliukas ant programėlės ikonos ---------------- */
+
+  var unseen = +((document.querySelector('meta[name="unseen"]') || {}).content || 0);
+  if (csrf && 'setAppBadge' in navigator) {
+    try { (unseen > 0 ? navigator.setAppBadge(unseen) : navigator.clearAppBadge()).catch(function () {}); } catch (e) { /* nepalaikoma */ }
+  }
+
+  /* ---------------- Atnaujinimas grįžus į programėlę ---------------- */
+  // iPhone programėlėje nėra „perkrauti“ mygtuko – sąrašą atnaujiname automatiškai.
+  var hiddenAt = 0;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    var onList = !/[?&]view=(edit|settings)/.test(location.search);
+    if (hiddenAt && Date.now() - hiddenAt > 60000 && onList && !$('#picker:not([hidden])')) location.reload();
+  });
 })();
