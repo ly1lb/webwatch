@@ -999,6 +999,9 @@ function view_settings(?array $flash): void
         <p class="muted">Jūsų pačių kompiuteriai skirtingose vietose gali tikrinti puslapius per savo interneto ryšį –
             naudinga, kai hostingo serverio adresą svetainė blokuoja. Stebėjime pasirinkite <b>„Serveris, o jei nepavyksta – namų kompiuteriai“</b>.
             Perdavimas veikia eilės tvarka: jei pirmas kompiuteris neprisijungęs ar jo ryšys neveikia, bandomas antras, tada trečias.</p>
+        <p class="hint">💡 Jei svetainė blokuoja net namų kompiuterį (HTTP 403, „Just a moment“), tame kompiuteryje įdiekite
+            <b>Google Chrome</b> arba <b>Microsoft Edge</b> – agentas tokius puslapius automatiškai parsiųs per tikrą naršyklę
+            (tikras atspaudas ir JavaScript), o būtent to apsaugos ir tikrina.</p>
         <?php
         $agents = agents_all();
         $newId = (int)($_GET['agent'] ?? 0);

@@ -122,8 +122,15 @@ vietų arba kai hostingo serverio adresą svetainė blokuoja.
 Jei pirmas neprisijungęs ar jo interneto ryšys neveikia – bandomas antras, tada trečias. Svetainės atsakymas
 (net klaidos kodas) laikomas rezultatu; kitas kompiuteris imamas tik tada, kai sutrinka pats kompiuteris.
 
-Agento programa (`agent/agent.py`, `agent/agent.ps1`) tik parsiunčia nurodytą puslapį ir grąžina jį serveriui –
-jokių papildomų bibliotekų nereikia. Pašalinti: tą pačią komandą su `--uninstall` (arba `-Uninstall`).
+**Sudėtingos apsaugos (Cloudflare ir pan.):** jei svetainė blokuoja net namų kompiuterį (HTTP 403,
+„Just a moment“) – tai apsauga tikrina ne IP, o užklausos „pirštų atspaudą“. Tame kompiuteryje įdiekite
+**Google Chrome** arba **Microsoft Edge**; agentas tokius puslapius automatiškai parsiųs per tą naršyklę
+(paleistą fone, be lango), su tikru naršyklės atspaudu ir JavaScript vykdymu. Įprastus puslapius jis ir toliau
+ims greituoju būdu, o naršyklę pasitelks tik užblokuotiems.
+
+Agento programa (`agent/agent.py`, `agent/agent.ps1`) parsiunčia nurodytą puslapį ir grąžina jį serveriui.
+Python agentui papildomų bibliotekų nereikia; naršyklės režimui – įdiegta Chrome/Edge. Pašalinti: tą pačią
+komandą su `--uninstall` (arba `-Uninstall`).
 
 ### Apribojimai
 

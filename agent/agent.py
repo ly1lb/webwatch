@@ -17,28 +17,119 @@ Reikia tik Python 3 (jokių papildomų bibliotekų).
 import gzip
 import json
 import os
+import re
 import ssl
 import sys
 import time
 import zlib
+import shutil
 import socket
+import tempfile
 import platform
+import subprocess
 import urllib.request
 import urllib.error
 
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "1"
+VERSION = "2"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 45
+BROWSER_WAIT_MS = 15000           # kiek laiko naršyklei leisti vykdyti JS (Cloudflare patikra)
 BROWSER_HEADERS = {
     "mobile": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
               "(KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
     "desktop": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
 }
+
+# Blokavimo / patikros požymiai (kai reikia tikros naršyklės)
+CHALLENGE_RE = re.compile(
+    rb"cf-chl|challenge-platform|Just a moment|Attention Required|Checking your browser|"
+    rb"_Incapsula_|px-captcha|captcha-delivery|datadome|ddos-guard|Pardon Our Interruption",
+    re.I,
+)
+
+
+def find_browser():
+    """Suranda įdiegtą Chrome / Edge / Chromium naršyklę (jos varikliui reikia tikro atspaudo)."""
+    names = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+             "chrome", "microsoft-edge", "microsoft-edge-stable", "brave-browser"]
+    for n in names:
+        p = shutil.which(n)
+        if p:
+            return p
+    guesses = []
+    sysname = platform.system()
+    if sysname == "Windows":
+        pf = [os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+              os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+              os.environ.get("LOCALAPPDATA", "")]
+        for base in pf:
+            guesses += [
+                os.path.join(base, r"Google\Chrome\Application\chrome.exe"),
+                os.path.join(base, r"Microsoft\Edge\Application\msedge.exe"),
+                os.path.join(base, r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ]
+    elif sysname == "Darwin":
+        guesses += [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ]
+    for g in guesses:
+        if g and os.path.exists(g):
+            return g
+    return None
+
+
+BROWSER_PATH = None
+BROWSER_CHECKED = False
+
+
+def browser_path():
+    global BROWSER_PATH, BROWSER_CHECKED
+    if not BROWSER_CHECKED:
+        BROWSER_PATH = find_browser()
+        BROWSER_CHECKED = True
+        if BROWSER_PATH:
+            print("Rasta naršyklė sudėtingiems puslapiams: %s" % BROWSER_PATH)
+        else:
+            print("Naršyklė nerasta – sudėtingoms svetainėms įdiekite Chrome arba Edge.")
+    return BROWSER_PATH
+
+
+def browser_fetch(url, ua):
+    """Parsiunčia puslapį per vietinę naršyklę (tikras TLS atspaudas + JavaScript)."""
+    exe = browser_path()
+    if not exe:
+        return None
+    profile = tempfile.mkdtemp(prefix="wwagent-")
+    try:
+        args = [
+            exe, "--headless=new", "--disable-gpu", "--no-first-run",
+            "--no-default-browser-check", "--disable-extensions", "--mute-audio",
+            "--no-sandbox", "--disable-dev-shm-usage", "--hide-scrollbars",
+            "--user-data-dir=" + profile, "--user-agent=" + ua,
+            "--virtual-time-budget=%d" % BROWSER_WAIT_MS, "--dump-dom", url,
+        ]
+        out = subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20).stdout
+        if (not out or len(out) < 200) and b"--headless=new" not in out:
+            # senesnė naršyklė nemoka „=new“
+            args[1] = "--headless"
+            out = subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20).stdout
+        if out and not CHALLENGE_RE.search(out[:30000]):
+            return 200, out, url, "text/html; charset=utf-8", ""
+        return 403, out or b"", url, "text/html", "naršyklė negavo turinio (galimai reikia CAPTCHA)"
+    except subprocess.TimeoutExpired:
+        return 0, b"", url, "", "naršyklė neatsakė laiku"
+    except Exception as e:  # noqa
+        return 0, b"", url, "", "naršyklės klaida: %s" % e
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 def api(action, params="", data=None, headers=None, timeout=POLL_WAIT + 15):
@@ -51,9 +142,8 @@ def api(action, params="", data=None, headers=None, timeout=POLL_WAIT + 15):
     return urllib.request.urlopen(req, timeout=timeout, context=ctx)
 
 
-def fetch(job):
-    """Parsiunčia puslapį; grąžina (status, body_bytes, final_url, content_type, error)."""
-    ua = job.get("ua") or BROWSER_HEADERS["desktop"]
+def fetch_plain(url, ua, extra_headers):
+    """Greitas parsiuntimas per Python (be JS). Grąžina (status, body, final_url, ctype, error)."""
     headers = {
         "User-Agent": ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -61,11 +151,11 @@ def fetch(job):
         "Accept-Encoding": "gzip, deflate",
         "Connection": "close",
     }
-    for k, v in (job.get("headers") or {}).items():
+    for k, v in (extra_headers or {}).items():
         if k:
             headers[k] = v
     try:
-        req = urllib.request.Request(job["url"], headers=headers)
+        req = urllib.request.Request(url, headers=headers)
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT, context=ctx) as resp:
             raw = resp.read(8 * 1024 * 1024)
@@ -83,11 +173,37 @@ def fetch(job):
                 body = gzip.decompress(body)
         except Exception:
             pass
-        return e.code, body, job["url"], e.headers.get("Content-Type", "") if e.headers else "", ""
+        return e.code, body, url, e.headers.get("Content-Type", "") if e.headers else "", ""
     except (urllib.error.URLError, socket.timeout, ssl.SSLError, ConnectionError) as e:
-        return 0, b"", job["url"], "", str(getattr(e, "reason", e))
+        return 0, b"", url, "", str(getattr(e, "reason", e))
     except Exception as e:  # noqa
-        return 0, b"", job["url"], "", str(e)
+        return 0, b"", url, "", str(e)
+
+
+def is_blocked(status, body):
+    return status in (401, 403, 405, 406, 429, 451, 503) or bool(CHALLENGE_RE.search((body or b"")[:30000]))
+
+
+def fetch(job):
+    """Parsiunčia puslapį; prireikus – per vietinę naršyklę. Grąžina (status, body, final_url, ctype, error)."""
+    ua = job.get("ua") or BROWSER_HEADERS["desktop"]
+    url = job["url"]
+    extra = job.get("headers") or {}
+    want_browser = bool(job.get("browser"))
+
+    # JS puslapiams iškart per naršyklę; kitaip pirma greitas būdas
+    if not want_browser:
+        status, body, final_url, ctype, error = fetch_plain(url, ua, extra)
+        if not is_blocked(status, body):
+            return status, body, final_url, ctype, error
+        print("  užblokuota (HTTP %s) – bandau per vietinę naršyklę…" % status)
+
+    br = browser_fetch(url, ua)
+    if br is not None:
+        return br
+    if want_browser:  # naršyklės nėra, bet reikėjo jos – pabandom paprastai
+        return fetch_plain(url, ua, extra)
+    return status, body, final_url, ctype, error  # naršyklės nėra – grąžinam blokuotą atsakymą
 
 
 def send_result(job_id, status, body, final_url, ctype, error):
