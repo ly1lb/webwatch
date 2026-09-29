@@ -19,8 +19,8 @@ declare(strict_types=1);
  */
 
 const WW_AGENT_ONLINE_SECONDS = 45;   // per tiek s be „poll“ kompiuteris laikomas atsijungusiu
-const WW_AGENT_CLAIM_TIMEOUT = 12;    // per tiek s kompiuteris turi paimti darbą
-const WW_AGENT_RESULT_TIMEOUT = 80;   // per tiek s turi grąžinti rezultatą (naršyklės režimas lėtesnis)
+const WW_AGENT_CLAIM_TIMEOUT = 15;    // per tiek s kompiuteris turi paimti darbą
+const WW_AGENT_RESULT_TIMEOUT = 110;  // per tiek s turi grąžinti rezultatą (naršyklės režimas lėtesnis)
 
 function agents_all(): array
 {
@@ -65,6 +65,7 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
     }
 
     $lastBlocked = null;
+    $lastFail = null;
     $anyTried = false;
     foreach ($agents as $agent) {
         if (!agent_is_online($agent)) {
@@ -75,12 +76,15 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
         $r['agent'] = (string)$agent['name'];
 
         if ($r['node_failed']) {
-            // Sutriko pats kompiuteris ar jo ryšys – perduodame kitam
+            // Sutriko pats kompiuteris ar jo ryšys – perduodame kitam. Priežastį įsimename matomoje vietoje.
             $db->prepare('UPDATE agents SET fails = fails + 1, last_error = ? WHERE id = ?')
                 ->execute([mb_substr($r['error'], 0, 300), $agent['id']]);
             ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – perduodama kitam');
+            $lastFail = $r;
             continue;
         }
+        // Sėkmingą darbą pažymime (išvalome seną klaidą)
+        db()->prepare("UPDATE agents SET last_error = '' WHERE id = ?")->execute([$agent['id']]);
         // Kompiuteris atsakė. Jei svetainė jį irgi užblokavo – gal kita vieta praeis
         if ($r['blocked']) {
             $lastBlocked = $r;
@@ -92,9 +96,13 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
     if ($lastBlocked) {
         return $lastBlocked;
     }
-    $res['error'] = $anyTried
-        ? 'Kompiuteris rodomas prisijungęs, bet neatsakė laiku – patikrinkite, ar tame kompiuteryje veikia naujausia agento versija ir ar jo langas neužstrigęs.'
-        : 'Nė vienas tikrinimo taškas šiuo metu neprisijungęs. Paleiskite agento programą kompiuteryje.';
+    if ($lastFail) {
+        // Konkreti priežastis iš paskutinio bandymo (nepaėmė / negrąžino)
+        $lastFail['error'] = ($lastFail['agent'] !== '' ? '„' . $lastFail['agent'] . '“: ' : '') . $lastFail['error'];
+        $lastFail['blocked'] = true;
+        return $lastFail;
+    }
+    $res['error'] = 'Nė vienas tikrinimo taškas šiuo metu neprisijungęs. Paleiskite agento programą kompiuteryje.';
     $res['blocked'] = true;
     return $res;
 }
@@ -130,7 +138,10 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
             return agent_interpret($r, $url);
         }
         if ($status !== 'claimed' && !$claimed && $waited > WW_AGENT_CLAIM_TIMEOUT) {
-            $res['error'] = 'nepaėmė darbo laiku'; // greičiausiai ką tik atsijungė
+            // Kompiuteris prisijungęs (skambina), bet nepaėmė jam skirto darbo –
+            // beveik visada sena agento versija arba jis nevykdo naujų užduočių.
+            $res['error'] = 'nepaėmė darbo (sena agento versija? atnaujinkite ją tame kompiuteryje)';
+            $res['stage'] = 'not_claimed';
             $res['node_failed'] = true;
             break;
         }
@@ -138,7 +149,9 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
             $claimed = true;
         }
         if ($waited > WW_AGENT_RESULT_TIMEOUT) {
-            $res['error'] = 'neatsakė laiku';
+            // Darbą paėmė, bet negrąžino turinio – lėta naršyklė, lėtas tinklas ar WAF muša grąžinimą
+            $res['error'] = 'paėmė darbą, bet negrąžino turinio per ' . WW_AGENT_RESULT_TIMEOUT . ' s (lėta naršyklė, tinklas arba hostingo apsauga)';
+            $res['stage'] = 'no_result';
             $res['node_failed'] = true;
             break;
         }

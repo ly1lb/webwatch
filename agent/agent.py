@@ -33,11 +33,11 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "3"
+VERSION = "4"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 45
-BROWSER_WAIT_MS = 15000           # kiek laiko naršyklei leisti vykdyti JS (Cloudflare patikra)
+BROWSER_WAIT_MS = 10000           # kiek laiko naršyklei leisti vykdyti JS (Cloudflare patikra)
 BROWSER_HEADERS = {
     "mobile": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
               "(KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",

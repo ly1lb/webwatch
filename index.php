@@ -1033,7 +1033,7 @@ function view_settings(?array $flash): void
                                 · atlikta <?= (int)$a['jobs_done'] ?>
                                 <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
                             </small>
-                            <?php if ($a['last_error'] && !$on): ?><small class="err-text"><?= h($a['last_error']) ?></small><?php endif; ?>
+                            <?php if ($a['last_error']): ?><small class="err-text">⚠️ <?= h($a['last_error']) ?></small><?php endif; ?>
                         </div>
                         <span class="ag-btns">
                             <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>

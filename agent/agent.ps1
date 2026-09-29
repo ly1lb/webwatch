@@ -12,7 +12,7 @@ param([switch]$Install, [switch]$Uninstall)
 $Server = "__WW_SERVER__"
 $Token  = "__WW_TOKEN__"
 $Name   = "__WW_NAME__"
-$Version = "3"
+$Version = "4"
 $PollWait = 25
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
@@ -78,22 +78,41 @@ function Invoke-BrowserFetch($url, $ua) {
     if (-not $script:BrowserExe) { return $null }
     $profile = Join-Path $env:TEMP ("wwagent-" + [Guid]::NewGuid().ToString("N"))
     try {
-        $out = Join-Path $profile "dom.html"
         New-Item -ItemType Directory -Force -Path $profile | Out-Null
-        $args = @("--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-            "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--user-data-dir=$profile",
-            "--user-agent=$ua", "--virtual-time-budget=15000", "--dump-dom", $url)
-        $p = Start-Process -FilePath $script:BrowserExe -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $out
-        if (-not $p.WaitForExit(60000)) { $p.Kill(); return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle neatsake laiku" } }
-        $bytes = if (Test-Path $out) { [IO.File]::ReadAllBytes($out) } else { [byte[]]@() }
-        $txt = [Text.Encoding]::UTF8.GetString($bytes)
-        if ($bytes.Length -gt 200 -and $txt -notmatch $ChallengeRe) {
+        # Turinį imam tiesiai iš narsykles srauto (stdout), be laikino failo –
+        # kitaip Chrome dar laiko faila atidaryta ir gaunam „used by another process“.
+        $q = @(
+            "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+            "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--disable-dev-shm-usage",
+            "--user-data-dir=`"$profile`"", "--user-agent=`"$ua`"",
+            "--virtual-time-budget=10000", "--dump-dom", "`"$url`""
+        ) -join " "
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:BrowserExe
+        $psi.Arguments = $q
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+        $p = [System.Diagnostics.Process]::Start($psi)
+        # Skaitom abu srautus asinchroniškai, kad vamzdis neužsipildytų ir neužstrigtų
+        $so = $p.StandardOutput.ReadToEndAsync()
+        $se = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(60000)) {
+            try { $p.Kill() } catch {}
+            return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle neatsake laiku" }
+        }
+        $html = $so.Result
+        $bytes = [Text.Encoding]::UTF8.GetBytes($html)
+        if ($bytes.Length -gt 200 -and $html -notmatch $ChallengeRe) {
             return @{ status = 200; body = $bytes; ctype = "text/html; charset=utf-8"; err = "" }
         }
         return @{ status = 403; body = $bytes; ctype = "text/html"; err = "narsykle negavo turinio (galimai reikia CAPTCHA)" }
     } catch {
         return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykles klaida: $($_.Exception.Message)" }
     } finally {
+        try { if ($p -and -not $p.HasExited) { $p.Kill() } } catch {}
         Remove-Item -Recurse -Force -Path $profile -ErrorAction SilentlyContinue
     }
 }
