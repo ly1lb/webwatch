@@ -144,8 +144,9 @@ while ($true) {
         $code = $null
         if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
         if ($code -eq 403) {
-            Write-Host "KLAIDA: serveris atmete rakta (403). Sugeneruokite nauja rakta WebWatch nustatymuose."
-            Start-Sleep -Seconds 30
+            Write-Host "KLAIDA: serveris nebeatpazysta sio kompiuterio (403) - raktas pakeistas arba taskas istrintas."
+            Write-Host "       WebWatch nustatymuose prie sio tasko spauskite 'Idiegti' ir paleiskite komanda is naujo."
+            Start-Sleep -Seconds 60
         } else {
             Write-Host "Nera rysio su serveriu ($($_.Exception.Message)) - bandau vel po $backoff s"
             Start-Sleep -Seconds $backoff

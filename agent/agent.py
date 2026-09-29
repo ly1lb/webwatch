@@ -242,8 +242,9 @@ def run():
             idle_backoff = 2
         except urllib.error.HTTPError as e:
             if e.code == 403:
-                print("KLAIDA: serveris atmetė raktą (403). Sugeneruokite naują raktą WebWatch nustatymuose.")
-                time.sleep(30)
+                print("KLAIDA: serveris nebeatpažįsta šio kompiuterio (403) – raktas pakeistas arba taškas ištrintas.")
+                print("       WebWatch nustatymuose prie šio taško spauskite „Įdiegti“ ir paleiskite komandą iš naujo.")
+                time.sleep(60)
             else:
                 print("Serverio klaida HTTP %s – bandau vėl po %ss" % (e.code, idle_backoff))
                 time.sleep(idle_backoff)

@@ -336,8 +336,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($do === 'delete_agent') {
         db()->prepare('DELETE FROM agents WHERE id = ?')->execute([(int)($_POST['id'] ?? 0)]);
-        flash('Tikrinimo taškas pašalintas');
+        flash('Tikrinimo taškas pašalintas. Tame kompiuteryje paleiskite agentą su „--uninstall“, kad jis nustotų veikti.');
         redirect('?view=settings#agents');
+    }
+
+    if ($do === 'rotate_agent') {
+        $id = (int)($_POST['id'] ?? 0);
+        db()->prepare("UPDATE agents SET token = ?, last_seen = NULL, last_ip = '', last_error = '' WHERE id = ?")
+            ->execute([bin2hex(random_bytes(24)), $id]);
+        flash('Sugeneruotas naujas raktas. Tame kompiuteryje paleiskite naują diegimo komandą iš naujo.');
+        redirect('?view=settings&agent=' . $id . '#agents');
     }
 
     if ($do === 'agent_priority') {
@@ -1002,6 +1010,9 @@ function view_settings(?array $flash): void
         <p class="hint">💡 Jei svetainė blokuoja net namų kompiuterį (HTTP 403, „Just a moment“), tame kompiuteryje įdiekite
             <b>Google Chrome</b> arba <b>Microsoft Edge</b> – agentas tokius puslapius automatiškai parsiųs per tikrą naršyklę
             (tikras atspaudas ir JavaScript), o būtent to apsaugos ir tikrina.</p>
+        <p class="hint">ℹ️ <b>Norint prijungti kompiuterį iš naujo</b> (pvz. atnaujinus programą) – <b>netrinkite</b> taško, o spauskite
+            <b>„Įdiegti“</b> ir paleiskite komandą tame kompiuteryje. Trynimas pakeičia raktą, todėl senoji programa nustoja veikti.
+            „Neatsakė laiku“ paprastai reiškia seną arba pakibusią agento programą – atnaujinkite ją tame kompiuteryje.</p>
         <?php
         $agents = agents_all();
         $newId = (int)($_GET['agent'] ?? 0);
@@ -1025,7 +1036,7 @@ function view_settings(?array $flash): void
                             <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>
                             <?php if ($i < count($agents) - 1): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="down"><button class="btn small ghost" title="Žemyn">↓</button></form><?php endif; ?>
                             <a class="btn small" href="?view=settings&agent=<?= $a['id'] ?>#agents">Įdiegti</a>
-                            <form method="post" onsubmit="return confirm('Pašalinti šį tikrinimo tašką?')"><?= csrf_field() ?><input type="hidden" name="do" value="delete_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button class="btn small ghost">✕</button></form>
+                            <form method="post" onsubmit="return confirm('Ištrinti šį tašką visam laikui? Norėdami tik prijungti kompiuterį iš naujo, spauskite „Įdiegti“, o ne šį mygtuką.')"><?= csrf_field() ?><input type="hidden" name="do" value="delete_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button class="btn small ghost" title="Ištrinti visam laikui">🗑</button></form>
                         </span>
                     </li>
                 <?php endforeach; ?>
@@ -1051,6 +1062,10 @@ function view_settings(?array $flash): void
                 <p class="hint">Įdiegus, kompiuteris pats prisijungs (žalias taškas viršuje) ir veiks fone net po perkrovimo.
                     Programą galima ir tiesiog atsisiųsti: <a href="<?= h($setup['win_url']) ?>">Windows (.ps1)</a> ·
                     <a href="<?= h($setup['nix_url']) ?>">Mac/Linux (.py)</a>. Pašalinti: paleiskite tą pačią komandą su <code>-Install</code> → <code>-Uninstall</code> (arba <code>--uninstall</code>).</p>
+                <form method="post" onsubmit="return confirm('Pakeisti raktą? Senas nustos veikti – tame kompiuteryje reikės paleisti komandą iš naujo.')">
+                    <?= csrf_field() ?><input type="hidden" name="do" value="rotate_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>">
+                    <button class="btn small ghost">🔑 Pakeisti raktą (jei nutekėjo)</button>
+                </form>
             </div>
         <?php endif; ?>
 

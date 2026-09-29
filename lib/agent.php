@@ -18,9 +18,9 @@ declare(strict_types=1);
  * Jei pirmas neprisijungęs, nepaima ar jo ryšys neveikia – bandomas antras, tada trečias.
  */
 
-const WW_AGENT_ONLINE_SECONDS = 90;   // per tiek s be „poll“ kompiuteris laikomas atsijungusiu
+const WW_AGENT_ONLINE_SECONDS = 45;   // per tiek s be „poll“ kompiuteris laikomas atsijungusiu
 const WW_AGENT_CLAIM_TIMEOUT = 12;    // per tiek s kompiuteris turi paimti darbą
-const WW_AGENT_RESULT_TIMEOUT = 75;   // per tiek s turi grąžinti rezultatą
+const WW_AGENT_RESULT_TIMEOUT = 80;   // per tiek s turi grąžinti rezultatą (naršyklės režimas lėtesnis)
 
 function agents_all(): array
 {
@@ -93,8 +93,8 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
         return $lastBlocked;
     }
     $res['error'] = $anyTried
-        ? 'Nė vienas tikrinimo taškas neatsakė laiku'
-        : 'Nė vienas tikrinimo taškas šiuo metu neprisijungęs';
+        ? 'Kompiuteris rodomas prisijungęs, bet neatsakė laiku – patikrinkite, ar tame kompiuteryje veikia naujausia agento versija ir ar jo langas neužstrigęs.'
+        : 'Nė vienas tikrinimo taškas šiuo metu neprisijungęs. Paleiskite agento programą kompiuteryje.';
     $res['blocked'] = true;
     return $res;
 }
