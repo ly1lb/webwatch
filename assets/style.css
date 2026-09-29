@@ -232,6 +232,11 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .hint-list { font-size: .85rem; color: var(--muted); padding-left: 20px; margin: 0 0 12px; }
 .card details { margin-bottom: 10px; }
 .import-form { margin: 0; }
+.test-url-form { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.test-url-form .test-result { margin-top: 12px; }
+.bt-row { font-size: .88rem; padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
+.bt-row.ok { color: var(--ok); font-weight: 600; }
+.test-result .flash { margin: 10px 0 0; }
 .chart svg { width: 100%; height: auto; display: block; }
 .chart .c-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .chart .c-area { fill: var(--accent); opacity: .1; }

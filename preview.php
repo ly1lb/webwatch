@@ -26,7 +26,7 @@ $f = fetch_for_watch([
     'user_agent' => (string)($_GET['ua'] ?? 'mobile'),
     'render_js' => !empty($_GET['js']),
 ]);
-if (!$f['ok'] && $f['body'] === '') {
+if (!$f['ok']) {
     echo '<!doctype html><meta charset="utf-8"><body style="font:16px -apple-system,sans-serif;padding:24px;color:#b91c1c">'
         . h($f['error']) . '</body>';
     exit;

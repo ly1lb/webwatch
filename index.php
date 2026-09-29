@@ -183,7 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             if ($reset) {
-                $cols .= ", last_content = NULL, fail_count = 0, value_history = ''";
+                $cols .= ", last_content = NULL, fail_count = 0, value_history = '', fetch_via = ''";
             }
             $st = db()->prepare("UPDATE watches SET $cols WHERE id = :id");
             $st->execute($data + ['id' => $id]);
@@ -272,8 +272,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $keys = [
             'email' => ['email_to', 'email_from', 'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user'],
             'channels' => ['tg_token', 'tg_chat', 'ntfy_server', 'ntfy_topic', 'ntfy_token', 'webhook_url'],
-            'general' => ['quiet_from', 'quiet_to', 'render_api'],
+            'general' => ['quiet_from', 'quiet_to'],
+            'bypass' => ['jina_key', 'scrape_provider', 'scrape_key', 'render_api'],
         ];
+        if (($_POST['section'] ?? '') === 'bypass') {
+            set_setting('bypass_reader', !empty($_POST['bypass_reader']) ? '1' : '0');
+        }
         $section = array_key_exists($_POST['section'] ?? '', $keys) ? $_POST['section'] : 'email';
         foreach ($keys[$section] as $k) {
             set_setting($k, trim((string)($_POST[$k] ?? '')));
@@ -635,8 +639,13 @@ function view_edit(?array $flash): void
                 <label>HTTP antraštės / slapukai <span class="muted">(puslapiams, kuriems reikia prisijungti)</span>
                     <textarea name="headers" id="f-headers" rows="3" placeholder="Cookie: sesija=abc123&#10;Authorization: Bearer ..." autocapitalize="off" spellcheck="false"><?= h($w['headers']) ?></textarea>
                 </label>
+                <details class="howto">
+                    <summary>📋 Įklijuoti iš kompiuterio naršyklės (cURL)</summary>
+                    <p class="hint">Chrome kompiuteryje: prisijunkite svetainėje → F12 → <b>Network</b> → perkraukite puslapį → dešiniu pelės mygtuku ant pirmos užklausos → <b>Copy → Copy as cURL (bash)</b> → įklijuokite čia. Slapukai ir naršyklės tipas bus perkelti automatiškai.</p>
+                    <textarea id="curl-paste" rows="3" placeholder="curl 'https://...' -H 'cookie: ...'" autocapitalize="off" spellcheck="false"></textarea>
+                </details>
                 <label class="check"><input type="checkbox" name="render_js" id="f-render-js" value="1" <?= $w['render_js'] ? 'checked' : '' ?>>
-                    <span>Atvaizduoti JavaScript <span class="muted">(puslapiams, kurie turinį krauna per JS)<?= setting('render_api') ? '' : ' – reikia <a href="?view=settings#general">nustatyti paslaugą</a>' ?></span></span></label>
+                    <span>Visada per debesies naršyklę <span class="muted">(puslapiams, kurie turinį krauna per JavaScript; užblokuoti puslapiai perjungiami automatiškai ir be šios varnelės)</span></span></label>
             </details>
         </div>
 
@@ -701,6 +710,9 @@ function view_watch(?array $flash): void
         <div><small>Dažnis</small><b><?= h(interval_label((int)$w['interval_min'])) ?><?= $w['active'] ? '' : ' (pristabdyta)' ?></b></div>
         <div><small>Paskutinis tikrinimas</small><b><?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></b></div>
         <div><small>Paskutinis pokytis</small><b><?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></b></div>
+        <?php if (($w['fetch_via'] ?? '') !== '' && $w['fetch_via'] !== 'direct'): ?>
+            <div><small>Gaunama</small><b><?= h(WW_VIA_LABELS[$w['fetch_via']] ?? $w['fetch_via']) ?></b></div>
+        <?php endif; ?>
         <div><small>Pranešimai</small><b><?php
             $ch = parse_channels((string)$w['notify']);
             echo $ch ? h(implode(', ', array_map(fn($c) => trim(preg_replace('/^\S+\s/u', '', channel_labels()[$c][0])), $ch))) : 'išjungti';
@@ -710,7 +722,8 @@ function view_watch(?array $flash): void
         <?= value_chart((string)$w['value_history']) ?>
     <?php endif; ?>
     <?php if ($w['last_status'] === 'error'): ?>
-        <div class="flash err">⚠️ <?= h($w['last_error']) ?> (<?= (int)$w['fail_count'] ?> k. iš eilės)</div>
+        <div class="flash err">⚠️ <?= h($w['last_error']) ?> (<?= (int)$w['fail_count'] ?> k. iš eilės)
+            <?php if (str_contains((string)$w['last_error'], 'blokuoja')): ?><br><a href="?view=settings#bypass">🛡️ Apsaugos apėjimo nustatymai →</a><?php endif; ?></div>
     <?php endif; ?>
 
     <div class="actions wrap-btns">
@@ -890,11 +903,50 @@ function view_settings(?array $flash): void
                 <label>Nuo<input type="time" name="quiet_from" value="<?= h(setting('quiet_from', '')) ?>"></label>
                 <label>Iki<input type="time" name="quiet_to" value="<?= h(setting('quiet_to', '')) ?>"></label>
             </div>
-            <label>JavaScript atvaizdavimo paslauga <span class="muted">(nebūtina)</span>
-                <input type="text" name="render_api" value="<?= h(setting('render_api', '')) ?>" placeholder="https://app.scrapingbee.com/api/v1/?api_key=RAKTAS&render_js=true&url={url}" autocapitalize="off" spellcheck="false">
-            </label>
-            <p class="hint">Hostinger negali paleisti naršyklės, todėl puslapiams, kurie turinį krauna per JavaScript, galima naudoti išorinę paslaugą (ScrapingBee, ScraperAPI, Browserless ir pan. – dauguma turi nemokamą planą). Įrašykite adresą su <code>{url}</code> vietoje stebimo puslapio ir stebėjime pažymėkite „Atvaizduoti JavaScript“.</p>
             <div class="actions"><button class="btn primary">Išsaugoti</button></div>
+        </form>
+    </section>
+
+    <section class="card" id="bypass">
+        <h2>🛡️ Apsaugos nuo robotų apėjimas</h2>
+        <p class="muted">Android programėlės tikrina iš paties telefono, o WebWatch – iš serverio, kurį dalis svetainių (Cloudflare ir pan.) blokuoja.
+            Todėl WebWatch pats bando kelis būdus iš eilės ir įsimena tą, kuris veikia:</p>
+        <ol class="hint-list">
+            <li><b>Tiesiogiai</b>, apsimetant tikra naršykle (slapukai, antraštės, kitas naršyklės tipas) – nemokama.</li>
+            <li><b>Jina Reader</b> – tikra naršyklė debesyje, nemokama, be registracijos.</li>
+            <li><b>Apėjimo paslauga</b> – patikimiausia prieš griežtas apsaugas (reikia API rakto, yra nemokami kreditai).</li>
+        </ol>
+        <form method="post" class="form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="do" value="save_settings">
+            <input type="hidden" name="section" value="bypass">
+            <label class="check"><input type="checkbox" name="bypass_reader" value="1" <?= reader_enabled() ? 'checked' : '' ?>>
+                <span>Naudoti Jina Reader, kai svetainė blokuoja <span class="muted">(užblokuoto puslapio adresas perduodamas r.jina.ai; puslapiams su slapukais nenaudojama)</span></span></label>
+            <label>Jina API raktas <span class="muted">(nebūtina – didesni limitai, <a href="https://jina.ai/reader" target="_blank" rel="noopener">jina.ai</a>)</span>
+                <input type="text" name="jina_key" value="<?= h(setting('jina_key', '')) ?>" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+            <label>Apėjimo paslauga
+                <select name="scrape_provider" id="scrape-provider">
+                    <option value="">— nenaudoti —</option>
+                    <?php foreach (scrape_providers() as $k => [$label, $site]): ?>
+                        <option value="<?= h($k) ?>" <?= setting('scrape_provider', setting('render_api') ? 'custom' : '') === $k ? 'selected' : '' ?>><?= h($label) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label data-provider="scrapingbee scraperapi zenrows">API raktas
+                <input type="text" name="scrape_key" value="<?= h(setting('scrape_key', '')) ?>" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+            <label data-provider="custom">Paslaugos adresas su <code>{url}</code>
+                <input type="text" name="render_api" value="<?= h(setting('render_api', '')) ?>" placeholder="https://.../?key=RAKTAS&url={url}" autocapitalize="off" spellcheck="false"></label>
+            <p class="hint">Rekomenduojama: <a href="https://www.scrapingbee.com" target="_blank" rel="noopener">ScrapingBee</a> (1000 nemokamų kreditų, užklausa per apsaugą kainuoja ~75),
+                <a href="https://www.scraperapi.com" target="_blank" rel="noopener">ScraperAPI</a> (5000 nemok.), <a href="https://www.zenrows.com" target="_blank" rel="noopener">ZenRows</a>.
+                Paslauga naudojama <b>tik užblokuotiems puslapiams</b>, todėl kreditai eikvojami taupiai – tokiems puslapiams rinkitės tikrinimą kas valandą ar rečiau.</p>
+            <div class="actions wrap-btns">
+                <button class="btn primary">Išsaugoti</button>
+            </div>
+        </form>
+        <form class="form test-url-form" id="bypass-test">
+            <label>Išbandyti svetainę<input type="url" id="bypass-url" placeholder="https://..." autocapitalize="off" inputmode="url"></label>
+            <button type="submit" class="btn">🔍 Tikrinti visus būdus</button>
+            <div id="bypass-result" class="test-result" hidden></div>
         </form>
     </section>
 

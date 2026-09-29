@@ -246,7 +246,7 @@
         }
         var head = document.createElement('div');
         head.className = 'tr-head';
-        head.textContent = 'Rasta elementų: ' + r.count + ' · ' + r.length + ' simb.' + (r.info ? ' · ' + r.info : '');
+        head.textContent = 'Rasta elementų: ' + r.count + ' · ' + r.length + ' simb.' + (r.info ? ' · ' + r.info : '') + (r.via ? ' · gauta: ' + r.via : '');
         var pre = document.createElement('pre');
         pre.textContent = r.content || '(tuščia)';
         box.appendChild(head);
@@ -262,6 +262,32 @@
     });
 
     initPicker();
+
+    // „Copy as cURL“ iš naršyklės -> slapukai, prisijungimo antraštės ir naršyklės tipas
+    var curlBox = $('#curl-paste');
+    if (curlBox) curlBox.addEventListener('input', function () {
+      var txt = curlBox.value;
+      if (!/curl\s/i.test(txt)) return;
+      var keep = /^(cookie|authorization|x-[\w-]+)$/i;
+      var lines = [];
+      var re = /(?:-H|--header)\s+(?:\$?'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g, m;
+      while ((m = re.exec(txt))) {
+        var h = (m[1] !== undefined ? m[1] : m[2]).replace(/\\(.)/g, '$1');
+        var i = h.indexOf(':');
+        if (i < 1) continue;
+        var name = h.slice(0, i).trim(), val = h.slice(i + 1).trim();
+        if (/^user-agent$/i.test(name)) { $('#f-ua').value = /iPhone|Android|Mobile/.test(val) ? 'mobile' : 'desktop'; continue; }
+        if (keep.test(name) && !/^x-(requested-with|client-data)$/i.test(name)) lines.push(name.replace(/^cookie$/i, 'Cookie') + ': ' + val);
+      }
+      var b = /(?:-b|--cookie)\s+(?:\$?'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/.exec(txt);
+      if (b) lines.push('Cookie: ' + (b[1] !== undefined ? b[1] : b[2]));
+      var u = /curl\s+(?:\$?'([^']+)'|"([^"]+)"|(\S+))/.exec(txt);
+      if (u && !$('#f-url').value) $('#f-url').value = u[1] || u[2] || u[3];
+      if (!lines.length) { toast('Nerasta slapukų – ar nukopijavote „Copy as cURL (bash)“?', 'err'); return; }
+      $('#f-headers').value = lines.join('\n');
+      curlBox.value = '';
+      toast('Perkelta: ' + lines.map(function (l) { return l.split(':')[0]; }).join(', ') + ' ✅', 'ok');
+    });
   }
 
   function normUrl(u) {
@@ -378,6 +404,39 @@
       activeTag = chip.dataset.tag;
       $$('#tag-chips .chip').forEach(function (c) { c.classList.toggle('on', c === chip); });
       filterList();
+    });
+  });
+
+  /* ---------------- Apsaugos apėjimas ---------------- */
+
+  var prov = $('#scrape-provider');
+  if (prov) {
+    var syncProv = function () {
+      $$('[data-provider]').forEach(function (el) { el.hidden = el.dataset.provider.split(' ').indexOf(prov.value) < 0; });
+    };
+    prov.addEventListener('change', syncProv);
+    syncProv();
+  }
+  var bt = $('#bypass-test');
+  if (bt) bt.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = bt.querySelector('button'), box = $('#bypass-result');
+    busy(btn, true, 'Tikrinama… (iki 2 min.)');
+    api('bypass_test', { url: normUrl($('#bypass-url').value) }).then(function (r) {
+      busy(btn, false);
+      box.hidden = false;
+      box.innerHTML = '';
+      if (!r.ok) { box.textContent = r.error || 'Klaida'; return; }
+      r.rows.forEach(function (row) {
+        var d = document.createElement('div');
+        d.className = 'bt-row ' + (row.ok ? 'ok' : 'bad');
+        d.textContent = (row.ok ? '✅ ' : '❌ ') + row.via + (row.status ? ' (HTTP ' + row.status + ')' : '') + ' – ' + row.detail;
+        box.appendChild(d);
+      });
+      var s = document.createElement('div');
+      s.className = 'flash ' + (r.works ? 'ok' : 'warn');
+      s.textContent = r.works ? 'Veikia: ' + r.works + '. WebWatch šį būdą parinks automatiškai.' : 'Nė vienas būdas nepraėjo. Įjunkite apėjimo paslaugą (ScrapingBee ar kt.).';
+      box.appendChild(s);
     });
   });
 

@@ -106,6 +106,7 @@ try {
                 'content' => mb_substr($cmp, 0, 4000),
                 'info' => $info,
                 'title' => mb_substr($title, 0, 120),
+                'via' => $f['via'] === 'direct' ? '' : (WW_VIA_LABELS[$f['via']] ?? ''),
             ]);
 
         case 'check_now':
@@ -115,6 +116,43 @@ try {
             }
             $r = run_check($w, true);
             out($r);
+
+        case 'bypass_test':
+            // Bandoma iš eilės iki pirmo pasisekusio būdo (paslaugos kreditai neeikvojami be reikalo)
+            $url = trim((string)($input['url'] ?? ''));
+            if (!preg_match('~^https?://~i', $url)) {
+                out(['ok' => false, 'error' => 'Įrašykite adresą (https://...)']);
+            }
+            $steps = [
+                'direct' => fn() => fetch_url($url, 25, [], 'mobile'),
+                'direct-alt' => fn() => fetch_url($url, 25, [], 'desktop', 1, true),
+            ];
+            if (reader_enabled()) {
+                $steps['reader'] = fn() => fetch_reader($url);
+            }
+            if (service_url($url) !== '') {
+                $steps['service'] = fn() => fetch_for_watch(['url' => $url, 'render_js' => 1], false);
+            }
+            $rows = [];
+            $okVia = '';
+            foreach ($steps as $via => $fn) {
+                $r = $fn();
+                $title = preg_match('~<title[^>]*>(.*?)</title>~is', $r['body'], $m) ? trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8')) : '';
+                $rows[] = [
+                    'via' => WW_VIA_LABELS[$via],
+                    'ok' => $r['ok'],
+                    'status' => $r['status'],
+                    'detail' => $r['ok'] ? mb_substr($title ?: number_format(strlen($r['body'])) . ' baitų', 0, 80) : ($r['blocked'] ? 'užblokuota' : $r['error']),
+                ];
+                if ($r['ok']) {
+                    $okVia = WW_VIA_LABELS[$via];
+                    break;
+                }
+            }
+            if (!$okVia && service_url($url) === '') {
+                $rows[] = ['via' => WW_VIA_LABELS['service'], 'ok' => false, 'status' => 0, 'detail' => 'nesukonfigūruota – įrašykite API raktą aukščiau'];
+            }
+            out(['ok' => true, 'rows' => $rows, 'works' => $okVia]);
 
         case 'diff':
             $st = db()->prepare('SELECT c.*, w.ignore_numbers, w.ignore_regex FROM changes c JOIN watches w ON w.id = c.watch_id WHERE c.id = ?');

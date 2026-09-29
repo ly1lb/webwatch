@@ -89,6 +89,18 @@ Galima registruoti kelis įrenginius – pranešimai eis į visus.
 - CSS pavyzdžiai: `#price`, `.product-title`, `ul.news > li`, `table tr:nth-child(2) td`,
   `div:contains("Registracija")`. XPath: `//h1`, `//*[@id="main"]//a`.
 
+### Svetainės, kurios blokuoja robotus (Cloudflare ir pan.)
+
+Android programėlės tikrina iš paties telefono, o WebWatch – iš serverio, kurį dalis svetainių blokuoja.
+WebWatch tai sprendžia automatiškai – bando būdus iš eilės ir įsimena veikiantį:
+
+1. **Tiesiogiai kaip tikra naršyklė** (naršyklės antraštės, slapukai tarp tikrinimų, kitas naršyklės tipas, pagrindinio puslapio „apšildymas“).
+2. **Jina Reader** – nemokama tikra naršyklė debesyje (galima išjungti).
+3. **Apėjimo paslauga** su API raktu – ScrapingBee / ScraperAPI / ZenRows. Patikimiausia prieš griežtas apsaugas, naudojama tik užblokuotiems puslapiams.
+
+Nustatymai → **🛡️ Apsaugos nuo robotų apėjimas** → „Tikrinti visus būdus“ parodo, kuris būdas konkrečiai svetainei veikia.
+Puslapiams, kuriems reikia prisijungti: redaguojant → Papildomi → **„Įklijuoti iš kompiuterio naršyklės (cURL)“**.
+
 ### Apribojimai
 
 - WebWatch mato serverio grąžinamą HTML (kaip „peržiūrėti šaltinį“). Puslapiai, kurių turinys

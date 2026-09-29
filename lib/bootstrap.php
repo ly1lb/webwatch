@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.1.0');
+define('WW_VERSION', '1.2.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -119,6 +119,7 @@ function migrate(PDO $pdo): void
         'user_agent' => "TEXT NOT NULL DEFAULT 'mobile'",
         'render_js' => 'INTEGER NOT NULL DEFAULT 0',
         'value_history' => "TEXT NOT NULL DEFAULT ''",
+        'fetch_via' => "TEXT NOT NULL DEFAULT ''",
     ]);
 }
 
