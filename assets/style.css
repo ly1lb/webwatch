@@ -236,6 +236,18 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .test-url-form .test-result { margin-top: 12px; }
 .bt-row { font-size: .88rem; padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
 .bt-row.ok { color: var(--ok); font-weight: 600; }
+.agents { list-style: none; padding: 0; margin: 0 0 14px; }
+.agents li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+.agents .ag-order { color: var(--muted); font-weight: 700; width: 1.4em; }
+.agents .ag-info { flex: 1; min-width: 0; }
+.agents .ag-info b { display: block; }
+.agents .ag-info small { display: block; }
+.ag-btns { display: flex; gap: 4px; align-items: center; }
+.ag-btns form { margin: 0; }
+.ag-install { background: var(--bg); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+.ag-install h3 { margin: 0 0 8px; }
+.ag-install textarea { font-size: 12px; }
+.ag-add { border-top: 1px solid var(--line); padding-top: 14px; }
 .test-result .flash { margin: 10px 0 0; }
 .chart svg { width: 100%; height: auto; display: block; }
 .chart .c-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }

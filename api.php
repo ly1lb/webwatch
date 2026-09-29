@@ -154,6 +154,27 @@ try {
             }
             out(['ok' => true, 'rows' => $rows, 'works' => $okVia]);
 
+        case 'agent_test':
+            // Išbando puslapį tik per namų kompiuterius (su perdavimu kitam)
+            $url = trim((string)($input['url'] ?? ''));
+            if (!preg_match('~^https?://~i', $url)) {
+                out(['ok' => false, 'error' => 'Įrašykite adresą (https://...)']);
+            }
+            if (!agents_all()) {
+                out(['ok' => false, 'error' => 'Pirmiausia pridėkite bent vieną kompiuterį']);
+            }
+            $r = agent_fetch($url, [], 'desktop', false);
+            $title = preg_match('~<title[^>]*>(.*?)</title>~is', $r['body'], $m)
+                ? trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8')) : '';
+            out([
+                'ok' => $r['ok'],
+                'agent' => $r['agent'] ?? '',
+                'status' => $r['status'],
+                'detail' => $r['ok'] ? mb_substr($title ?: number_format(strlen($r['body'])) . ' baitų', 0, 90) : $r['error'],
+                'online' => count(agents_online()),
+                'total' => count(agents_all()),
+            ]);
+
         case 'diff':
             $st = db()->prepare('SELECT c.*, w.ignore_numbers, w.ignore_regex FROM changes c JOIN watches w ON w.id = c.watch_id WHERE c.id = ?');
             $st->execute([(int)($input['id'] ?? 0)]);

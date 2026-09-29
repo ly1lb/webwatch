@@ -440,6 +440,26 @@
     });
   });
 
+  /* ---------------- Namų kompiuterių testas ---------------- */
+
+  var at = $('#agent-test');
+  if (at) at.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = at.querySelector('button'), box = $('#agent-result');
+    busy(btn, true, 'Siunčiama į kompiuterį…');
+    api('agent_test', { url: normUrl($('#agent-url').value) }).then(function (r) {
+      busy(btn, false);
+      box.hidden = false;
+      box.innerHTML = '';
+      var s = document.createElement('div');
+      s.className = 'flash ' + (r.ok ? 'ok' : 'warn');
+      s.textContent = (r.ok ? '✅ Veikia' : '❌ Nepavyko') + (r.agent ? ' (' + r.agent + ')' : '')
+        + (r.status ? ' · HTTP ' + r.status : '') + ' · ' + (r.detail || '')
+        + (typeof r.online === 'number' ? ' · prisijungę: ' + r.online + '/' + r.total : '');
+      box.appendChild(s);
+    });
+  });
+
   /* ---------------- Kanalų nustatymai ---------------- */
 
   document.addEventListener('click', function (e) {

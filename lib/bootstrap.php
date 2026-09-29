@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.2.0');
+define('WW_VERSION', '1.3.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -21,6 +21,7 @@ mb_internal_encoding('UTF-8');
 require_once __DIR__ . '/diff.php';
 require_once __DIR__ . '/extract.php';
 require_once __DIR__ . '/fetch.php';
+require_once __DIR__ . '/agent.php';
 require_once __DIR__ . '/webpush.php';
 require_once __DIR__ . '/mailer.php';
 require_once __DIR__ . '/notify.php';
@@ -104,6 +105,37 @@ function migrate(PDO $pdo): void
             url TEXT NOT NULL,
             tag TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS agents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            created INTEGER NOT NULL,
+            last_seen INTEGER,
+            last_ip TEXT NOT NULL DEFAULT '',
+            info TEXT NOT NULL DEFAULT '',
+            jobs_done INTEGER NOT NULL DEFAULT 0,
+            fails INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            priority INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS agent_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            headers TEXT NOT NULL DEFAULT '',
+            ua TEXT NOT NULL DEFAULT '',
+            browser INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            agent_id INTEGER,
+            claimed INTEGER,
+            http_status INTEGER NOT NULL DEFAULT 0,
+            body BLOB,
+            final_url TEXT NOT NULL DEFAULT '',
+            content_type TEXT NOT NULL DEFAULT '',
+            via TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '',
+            target_agent INTEGER
+        );
         CREATE TABLE IF NOT EXISTS log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created INTEGER NOT NULL,
@@ -120,6 +152,7 @@ function migrate(PDO $pdo): void
         'render_js' => 'INTEGER NOT NULL DEFAULT 0',
         'value_history' => "TEXT NOT NULL DEFAULT ''",
         'fetch_via' => "TEXT NOT NULL DEFAULT ''",
+        'check_from' => "TEXT NOT NULL DEFAULT 'server'",
     ]);
 }
 

@@ -157,6 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'headers' => trim((string)($_POST['headers'] ?? '')),
             'user_agent' => ($_POST['user_agent'] ?? '') === 'desktop' ? 'desktop' : 'mobile',
             'render_js' => !empty($_POST['render_js']) ? 1 : 0,
+            'check_from' => in_array($_POST['check_from'] ?? '', ['server', 'auto', 'agent'], true) ? $_POST['check_from'] : 'server',
         ];
         if ($data['name'] === '') {
             $data['name'] = mb_substr(trim((string)($_POST['auto_name'] ?? '')), 0, 120);
@@ -241,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('?view=settings#backup');
         }
         $allowed = ['name', 'url', 'selector', 'compare_mode', 'keyword', 'number_dir', 'threshold', 'ignore_numbers',
-            'ignore_regex', 'interval_min', 'notify', 'active', 'tags', 'headers', 'user_agent', 'render_js'];
+            'ignore_regex', 'interval_min', 'notify', 'active', 'tags', 'headers', 'user_agent', 'render_js', 'check_from'];
         $n = 0;
         foreach ($list as $item) {
             if (!is_array($item) || !preg_match('~^https?://~i', (string)($item['url'] ?? ''))) {
@@ -323,6 +324,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Istorija išvalyta');
         redirect('?view=watch&id=' . $id);
     }
+
+    if ($do === 'add_agent') {
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 60) ?: 'Kompiuteris';
+        $prio = (int)(db()->query('SELECT COALESCE(MAX(priority), 0) + 1 FROM agents')->fetchColumn());
+        db()->prepare('INSERT INTO agents (name, token, created, priority) VALUES (?, ?, ?, ?)')
+            ->execute([$name, bin2hex(random_bytes(24)), time(), $prio]);
+        flash('Tikrinimo taškas pridėtas – dabar įdiekite programą kompiuteryje.');
+        redirect('?view=settings&agent=' . db()->lastInsertId() . '#agents');
+    }
+
+    if ($do === 'delete_agent') {
+        db()->prepare('DELETE FROM agents WHERE id = ?')->execute([(int)($_POST['id'] ?? 0)]);
+        flash('Tikrinimo taškas pašalintas');
+        redirect('?view=settings#agents');
+    }
+
+    if ($do === 'agent_priority') {
+        // Perkelia tašką eilėje aukštyn/žemyn (svarbu perdavimo tvarkai)
+        $id = (int)($_POST['id'] ?? 0);
+        $dir = ($_POST['dir'] ?? '') === 'up' ? 'up' : 'down';
+        $agents = agents_all();
+        $idx = array_search($id, array_column($agents, 'id'));
+        if ($idx !== false) {
+            $swap = $dir === 'up' ? $idx - 1 : $idx + 1;
+            if (isset($agents[$swap])) {
+                $st = db()->prepare('UPDATE agents SET priority = ? WHERE id = ?');
+                $st->execute([$swap, $id]);
+                $st->execute([$idx, $agents[$swap]['id']]);
+            }
+        }
+        redirect('?view=settings#agents');
+    }
     redirect('./');
 }
 
@@ -333,7 +366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 switch ($view) {
     case 'export':
         $rows = db()->query('SELECT name, url, selector, compare_mode, keyword, number_dir, threshold, ignore_numbers, ignore_regex,
-            interval_min, notify, active, tags, headers, user_agent, render_js FROM watches ORDER BY id')->fetchAll();
+            interval_min, notify, active, tags, headers, user_agent, render_js, check_from FROM watches ORDER BY id')->fetchAll();
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="webwatch-' . date('Y-m-d') . '.json"');
         echo json_encode(['app' => 'WebWatch', 'version' => WW_VERSION, 'exported' => date('c'), 'watches' => $rows],
@@ -530,9 +563,10 @@ function view_edit(?array $flash): void
         'id' => 0, 'name' => '', 'url' => (string)($_GET['url'] ?? ''), 'selector' => '', 'compare_mode' => 'text',
         'keyword' => '', 'number_dir' => 'any', 'threshold' => 0, 'ignore_numbers' => 0, 'ignore_regex' => '',
         'interval_min' => 60, 'notify' => 'push,fallback', 'active' => 1, 'tags' => '', 'headers' => '',
-        'user_agent' => 'mobile', 'render_js' => 0,
+        'user_agent' => 'mobile', 'render_js' => 0, 'check_from' => agents_all() ? 'auto' : 'server',
     ];
     $channels = parse_channels((string)$w['notify']);
+    $hasAgents = count(agents_all()) > 0;
     page_start($id ? 'Redaguoti' : 'Naujas stebėjimas', true, 'edit');
     render_flash($flash);
     $scope = $w['selector'] !== '' ? 'element' : 'page';
@@ -646,6 +680,16 @@ function view_edit(?array $flash): void
                 </details>
                 <label class="check"><input type="checkbox" name="render_js" id="f-render-js" value="1" <?= $w['render_js'] ? 'checked' : '' ?>>
                     <span>Visada per debesies naršyklę <span class="muted">(puslapiams, kurie turinį krauna per JavaScript; užblokuoti puslapiai perjungiami automatiškai ir be šios varnelės)</span></span></label>
+                <label>Iš kur tikrinti
+                    <select name="check_from">
+                        <option value="server" <?= $w['check_from'] === 'server' ? 'selected' : '' ?>>Tik hostingo serveris</option>
+                        <option value="auto" <?= $w['check_from'] === 'auto' ? 'selected' : '' ?>>Serveris, o jei nepavyksta – namų kompiuteriai</option>
+                        <option value="agent" <?= $w['check_from'] === 'agent' ? 'selected' : '' ?>>Tik namų kompiuteriai</option>
+                    </select>
+                </label>
+                <?php if (!$hasAgents): ?>
+                    <p class="hint">Namų kompiuterius pridėsite <a href="?view=settings#agents">Nustatymuose</a> – tada svetaines, kurios blokuoja serverį, tikrins jūsų kompiuteriai.</p>
+                <?php endif; ?>
             </details>
         </div>
 
@@ -947,6 +991,78 @@ function view_settings(?array $flash): void
             <label>Išbandyti svetainę<input type="url" id="bypass-url" placeholder="https://..." autocapitalize="off" inputmode="url"></label>
             <button type="submit" class="btn">🔍 Tikrinti visus būdus</button>
             <div id="bypass-result" class="test-result" hidden></div>
+        </form>
+    </section>
+
+    <section class="card" id="agents">
+        <h2>🖥️ Namų kompiuteriai (tikrinimo taškai)</h2>
+        <p class="muted">Jūsų pačių kompiuteriai skirtingose vietose gali tikrinti puslapius per savo interneto ryšį –
+            naudinga, kai hostingo serverio adresą svetainė blokuoja. Stebėjime pasirinkite <b>„Serveris, o jei nepavyksta – namų kompiuteriai“</b>.
+            Perdavimas veikia eilės tvarka: jei pirmas kompiuteris neprisijungęs ar jo ryšys neveikia, bandomas antras, tada trečias.</p>
+        <?php
+        $agents = agents_all();
+        $newId = (int)($_GET['agent'] ?? 0);
+        ?>
+        <?php if ($agents): ?>
+            <ul class="agents">
+                <?php foreach ($agents as $i => $a): $on = agent_is_online($a); ?>
+                    <li>
+                        <span class="ag-order"><?= $i + 1 ?>.</span>
+                        <span class="dot <?= $on ? 'ok' : 'paused' ?>" title="<?= $on ? 'Prisijungęs' : 'Neprisijungęs' ?>"></span>
+                        <div class="ag-info">
+                            <b><?= h($a['name']) ?></b>
+                            <small class="muted">
+                                <?= $on ? 'prisijungęs' : ($a['last_seen'] ? 'matytas ' . h(human_time((int)$a['last_seen'])) : 'dar neprisijungė') ?>
+                                · atlikta <?= (int)$a['jobs_done'] ?>
+                                <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
+                            </small>
+                            <?php if ($a['last_error'] && !$on): ?><small class="err-text"><?= h($a['last_error']) ?></small><?php endif; ?>
+                        </div>
+                        <span class="ag-btns">
+                            <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>
+                            <?php if ($i < count($agents) - 1): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="down"><button class="btn small ghost" title="Žemyn">↓</button></form><?php endif; ?>
+                            <a class="btn small" href="?view=settings&agent=<?= $a['id'] ?>#agents">Įdiegti</a>
+                            <form method="post" onsubmit="return confirm('Pašalinti šį tikrinimo tašką?')"><?= csrf_field() ?><input type="hidden" name="do" value="delete_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button class="btn small ghost">✕</button></form>
+                        </span>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+        <?php else: ?>
+            <p class="muted">Dar nepridėta nė vieno kompiuterio.</p>
+        <?php endif; ?>
+
+        <?php if ($newId && ($a = array_values(array_filter($agents, fn($x) => (int)$x['id'] === $newId))[0] ?? null)): $setup = agent_setup($a); ?>
+            <div class="ag-install">
+                <h3>Įdiegimas: „<?= h($a['name']) ?>“</h3>
+                <p class="hint">Paleiskite <b>tik tame kompiuteryje</b>, kurį norite įdarbinti. Raktas slaptas – kas jį turi, gali prisijungti kaip šis taškas.</p>
+                <details open>
+                    <summary><b>Windows</b></summary>
+                    <p class="hint">Start mygtukas → įrašykite <b>PowerShell</b> → atidarykite → įklijuokite ir Enter:</p>
+                    <textarea readonly rows="3" class="mono copy" onclick="this.select()"><?= h($setup['windows']) ?></textarea>
+                </details>
+                <details>
+                    <summary><b>Mac / Linux</b></summary>
+                    <p class="hint">Atidarykite <b>Terminal</b> ir įklijuokite (reikia Python 3, Mac/Linux jį turi):</p>
+                    <textarea readonly rows="2" class="mono copy" onclick="this.select()"><?= h($setup['unix']) ?></textarea>
+                </details>
+                <p class="hint">Įdiegus, kompiuteris pats prisijungs (žalias taškas viršuje) ir veiks fone net po perkrovimo.
+                    Programą galima ir tiesiog atsisiųsti: <a href="<?= h($setup['win_url']) ?>">Windows (.ps1)</a> ·
+                    <a href="<?= h($setup['nix_url']) ?>">Mac/Linux (.py)</a>. Pašalinti: paleiskite tą pačią komandą su <code>-Install</code> → <code>-Uninstall</code> (arba <code>--uninstall</code>).</p>
+            </div>
+        <?php endif; ?>
+
+        <form method="post" class="form ag-add">
+            <?= csrf_field() ?>
+            <input type="hidden" name="do" value="add_agent">
+            <label>Naujo kompiuterio pavadinimas
+                <input type="text" name="name" placeholder="pvz. Namai, Sodas, Pas tetą" maxlength="60" required>
+            </label>
+            <button class="btn primary">＋ Pridėti tikrinimo tašką</button>
+        </form>
+        <form class="form test-url-form" id="agent-test">
+            <label>Išbandyti puslapį per namų kompiuterius<input type="url" id="agent-url" placeholder="https://..." autocapitalize="off" inputmode="url"></label>
+            <button type="submit" class="btn">🖥️ Tikrinti per kompiuterius</button>
+            <div id="agent-result" class="test-result" hidden></div>
         </form>
     </section>
 

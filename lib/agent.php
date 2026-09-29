@@ -1,0 +1,189 @@
+<?php
+declare(strict_types=1);
+
+/*
+ * Nuotoliniai tikrinimo taškai („namų kompiuteriai“).
+ *
+ * Jūsų pačių kompiuteriai skirtingose vietose veikia kaip WebWatch tikrinimo taškai –
+ * lygiai kaip Uptime Kuma ar Pingdom nutolę mazgai. Naudinga, kai stebimą svetainę
+ * norite tikrinti iš kelių vietų arba kai hostingo serverio adresas kažkodėl negali
+ * pasiekti puslapio, o namų ryšys gali.
+ *
+ * Veikimas: kiekvienas kompiuteris paleidžia mažą programą (agent/agent.py), kuri nuolat
+ * „klausia“ serverio – agent.php?action=poll (ilga užklausa iki 25 s). Kai reikia puslapio,
+ * WebWatch sukuria darbą konkrečiam kompiuteriui; tas jį paima, parsiunčia per savo ryšį ir
+ * grąžina turinį (agent.php?action=result).
+ *
+ * Perdavimas kitam (failover): darbas siunčiamas kompiuteriams pagal eilę (prioritetą).
+ * Jei pirmas neprisijungęs, nepaima ar jo ryšys neveikia – bandomas antras, tada trečias.
+ */
+
+const WW_AGENT_ONLINE_SECONDS = 90;   // per tiek s be „poll“ kompiuteris laikomas atsijungusiu
+const WW_AGENT_CLAIM_TIMEOUT = 12;    // per tiek s kompiuteris turi paimti darbą
+const WW_AGENT_RESULT_TIMEOUT = 75;   // per tiek s turi grąžinti rezultatą
+
+function agents_all(): array
+{
+    return db()->query('SELECT * FROM agents ORDER BY priority, id')->fetchAll();
+}
+
+function agent_is_online(array $a): bool
+{
+    return (int)$a['last_seen'] >= time() - WW_AGENT_ONLINE_SECONDS;
+}
+
+function agents_online(): array
+{
+    return array_values(array_filter(agents_all(), 'agent_is_online'));
+}
+
+function agent_by_token(string $token): ?array
+{
+    if (strlen($token) < 20) {
+        return null;
+    }
+    $st = db()->prepare('SELECT * FROM agents WHERE token = ?');
+    $st->execute([$token]);
+    $a = $st->fetch();
+    return $a && hash_equals((string)$a['token'], $token) ? $a : null;
+}
+
+/**
+ * Parsiunčia puslapį per nuotolinius tikrinimo taškus, eilės tvarka su perdavimu kitam.
+ * Grąžina tą patį formatą kaip fetch_url() + 'agent' (kurio taško vardas atliko).
+ */
+function agent_fetch(string $url, array $headers, string $ua, bool $render = false): array
+{
+    $res = ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'error' => '', 'blocked' => false, 'agent' => ''];
+    $db = db();
+    $db->prepare('DELETE FROM agent_requests WHERE created < ?')->execute([time() - 900]);
+
+    $agents = agents_all();
+    if (!$agents) {
+        $res['error'] = 'Nėra pridėtų tikrinimo taškų';
+        return $res;
+    }
+
+    $lastBlocked = null;
+    $anyTried = false;
+    foreach ($agents as $agent) {
+        if (!agent_is_online($agent)) {
+            continue; // atsijungusį praleidžiame
+        }
+        $anyTried = true;
+        $r = agent_dispatch($db, (int)$agent['id'], $url, $headers, $ua, $render);
+        $r['agent'] = (string)$agent['name'];
+
+        if ($r['node_failed']) {
+            // Sutriko pats kompiuteris ar jo ryšys – perduodame kitam
+            $db->prepare('UPDATE agents SET fails = fails + 1, last_error = ? WHERE id = ?')
+                ->execute([mb_substr($r['error'], 0, 300), $agent['id']]);
+            ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – perduodama kitam');
+            continue;
+        }
+        // Kompiuteris atsakė. Jei svetainė jį irgi užblokavo – gal kita vieta praeis
+        if ($r['blocked']) {
+            $lastBlocked = $r;
+            continue;
+        }
+        return $r; // sėkmė arba tikras svetainės atsakymas (pvz. 404)
+    }
+
+    if ($lastBlocked) {
+        return $lastBlocked;
+    }
+    $res['error'] = $anyTried
+        ? 'Nė vienas tikrinimo taškas neatsakė laiku'
+        : 'Nė vienas tikrinimo taškas šiuo metu neprisijungęs';
+    $res['blocked'] = true;
+    return $res;
+}
+
+/**
+ * Sukuria darbą konkrečiam kompiuteriui ir laukia rezultato.
+ * Grąžina fetch_url() formatą + 'node_failed' (ar sutriko pats taškas, ne svetainė).
+ */
+function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, string $ua, bool $render): array
+{
+    $res = ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'error' => '', 'blocked' => false, 'node_failed' => false];
+
+    $db->prepare('INSERT INTO agent_requests (created, url, headers, ua, browser, target_agent) VALUES (?, ?, ?, ?, ?, ?)')
+        ->execute([time(), $url, implode("\n", $headers), WW_UA[$ua] ?? WW_UA['desktop'], $render ? 1 : 0, $agentId]);
+    $id = (int)$db->lastInsertId();
+    @set_time_limit(WW_AGENT_RESULT_TIMEOUT + 30);
+
+    $start = microtime(true);
+    $claimed = false;
+    $st = $db->prepare('SELECT status FROM agent_requests WHERE id = ?');
+    while (true) {
+        usleep(400000);
+        $st->execute([$id]);
+        $status = (string)$st->fetchColumn();
+        $st->closeCursor();
+        $waited = microtime(true) - $start;
+
+        if ($status === 'done') {
+            $full = $db->prepare('SELECT * FROM agent_requests WHERE id = ?');
+            $full->execute([$id]);
+            $r = $full->fetch();
+            $db->prepare('DELETE FROM agent_requests WHERE id = ?')->execute([$id]);
+            return agent_interpret($r, $url);
+        }
+        if ($status !== 'claimed' && !$claimed && $waited > WW_AGENT_CLAIM_TIMEOUT) {
+            $res['error'] = 'nepaėmė darbo laiku'; // greičiausiai ką tik atsijungė
+            $res['node_failed'] = true;
+            break;
+        }
+        if ($status === 'claimed') {
+            $claimed = true;
+        }
+        if ($waited > WW_AGENT_RESULT_TIMEOUT) {
+            $res['error'] = 'neatsakė laiku';
+            $res['node_failed'] = true;
+            break;
+        }
+    }
+    $db->prepare('DELETE FROM agent_requests WHERE id = ?')->execute([$id]);
+    return $res;
+}
+
+/** Įvertina kompiuterio grąžintą rezultatą (svetainės atsakymą). */
+function agent_interpret(array $r, string $url): array
+{
+    $res = ['ok' => false, 'status' => (int)$r['http_status'], 'body' => '', 'final_url' => $r['final_url'] ?: $url,
+        'error' => '', 'blocked' => false, 'node_failed' => false];
+
+    // Kompiuteris nepasiekė svetainės (ne svetainės, o taško ryšio bėda) – perduodame kitam
+    if ($r['error'] !== '' && (string)$r['body'] === '') {
+        $res['error'] = (string)$r['error'];
+        $res['node_failed'] = true;
+        return $res;
+    }
+    $body = to_utf8((string)$r['body'], (string)$r['content_type']);
+    $res['body'] = $body;
+    $res['blocked'] = is_block_response($res['status'], $body);
+    if ($res['blocked']) {
+        $res['error'] = 'Svetainė užblokavo ir šį tašką (HTTP ' . $res['status'] . ')';
+    } elseif ($res['status'] >= 400) {
+        $res['error'] = 'Svetainė grąžino HTTP ' . $res['status'];
+    } else {
+        $res['ok'] = true;
+    }
+    return $res;
+}
+
+/** Programos atsisiuntimo nuorodos ir paleidimo komandos vienam tikrinimo taškui. */
+function agent_setup(array $agent): array
+{
+    $t = rawurlencode((string)$agent['token']);
+    $winUrl = app_url() . 'agent.php?action=script&os=win&t=' . $t;
+    $nixUrl = app_url() . 'agent.php?action=script&os=unix&t=' . $t;
+    return [
+        'win_url' => $winUrl,
+        'nix_url' => $nixUrl,
+        // Windows: viena eilutė PowerShell lange
+        'windows' => 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm \'' . $winUrl . '\' -OutFile $env:APPDATA\\WWAgent.ps1; & $env:APPDATA\\WWAgent.ps1 -Install"',
+        // Mac / Linux: viena eilutė terminale
+        'unix' => 'curl -fsSL "' . $nixUrl . '" -o ~/ww-agent.py && python3 ~/ww-agent.py --install',
+    ];
+}

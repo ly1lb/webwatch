@@ -97,9 +97,33 @@ WebWatch tai sprendžia automatiškai – bando būdus iš eilės ir įsimena ve
 1. **Tiesiogiai kaip tikra naršyklė** (naršyklės antraštės, slapukai tarp tikrinimų, kitas naršyklės tipas, pagrindinio puslapio „apšildymas“).
 2. **Jina Reader** – nemokama tikra naršyklė debesyje (galima išjungti).
 3. **Apėjimo paslauga** su API raktu – ScrapingBee / ScraperAPI / ZenRows. Patikimiausia prieš griežtas apsaugas, naudojama tik užblokuotiems puslapiams.
+4. **Namų kompiuteriai** (žr. žemiau) – kai serverio adresą svetainė blokuoja, tikrinama per jūsų pačių kompiuterius.
 
 Nustatymai → **🛡️ Apsaugos nuo robotų apėjimas** → „Tikrinti visus būdus“ parodo, kuris būdas konkrečiai svetainei veikia.
 Puslapiams, kuriems reikia prisijungti: redaguojant → Papildomi → **„Įklijuoti iš kompiuterio naršyklės (cURL)“**.
+
+### Namų kompiuteriai (tikrinimo taškai)
+
+Savo kompiuterius skirtingose vietose galima įdarbinti kaip tikrinimo taškus – jie parsiunčia puslapius per
+savo interneto ryšį (kaip Uptime Kuma ar Pingdom nutolę mazgai). Naudinga savo svetainėms stebėti iš kelių
+vietų arba kai hostingo serverio adresą svetainė blokuoja.
+
+1. Nustatymai → **🖥️ Namų kompiuteriai** → įrašykite pavadinimą (pvz. „Namai“) → **Pridėti**.
+2. Spauskite **Įdiegti** ir paleiskite parodytą komandą tame kompiuteryje:
+   - **Windows** – PowerShell lange (viena eilutė, autostartas per suplanuotą užduotį);
+   - **Mac / Linux** – Terminale (reikia Python 3; autostartas per launchd / systemd).
+3. Kompiuteris pats prisijungs (žalias taškas) ir veiks fone net po perkrovimo.
+4. Stebėjime → Papildomi → **„Iš kur tikrinti“** pasirinkite:
+   - *Tik hostingo serveris* (numatyta, kai taškų nėra);
+   - *Serveris, o jei nepavyksta – namų kompiuteriai* (rekomenduojama);
+   - *Tik namų kompiuteriai*.
+
+**Perdavimas kitam (failover):** darbas siunčiamas kompiuteriams eilės tvarka (tvarką keičiate rodyklėmis ↑↓).
+Jei pirmas neprisijungęs ar jo interneto ryšys neveikia – bandomas antras, tada trečias. Svetainės atsakymas
+(net klaidos kodas) laikomas rezultatu; kitas kompiuteris imamas tik tada, kai sutrinka pats kompiuteris.
+
+Agento programa (`agent/agent.py`, `agent/agent.ps1`) tik parsiunčia nurodytą puslapį ir grąžina jį serveriui –
+jokių papildomų bibliotekų nereikia. Pašalinti: tą pačią komandą su `--uninstall` (arba `-Uninstall`).
 
 ### Apribojimai
 

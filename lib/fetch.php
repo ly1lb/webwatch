@@ -23,6 +23,7 @@ const WW_VIA_LABELS = [
     'direct-alt' => 'Tiesiogiai (kitas naršyklės tipas)',
     'reader' => 'Jina Reader (debesies naršyklė)',
     'service' => 'Apėjimo paslauga',
+    'agent' => 'Namų kompiuteris',
 ];
 
 function scrape_providers(): array
@@ -67,22 +68,35 @@ function fetch_for_watch(array $w, bool $remember = true): array
     $altUa = $ua === 'desktop' ? 'mobile' : 'desktop';
     $headers = parse_header_lines((string)($w['headers'] ?? ''));
     $hasService = service_url($url) !== '';
+    $checkFrom = (string)($w['check_from'] ?? 'server');
+    $hasAgents = (int)db()->query('SELECT COUNT(*) FROM agents')->fetchColumn() > 0;
 
-    $chain = ['direct', 'direct-alt'];
-    if (reader_enabled() && !$headers) { // prisijungimo slapukų trečiajai šaliai nesiunčiame
-        $chain[] = 'reader';
+    $chain = [];
+    if ($checkFrom !== 'agent') { // 'agent' = tik namų kompiuteriai; kiti – pirma serveris
+        $chain = ['direct', 'direct-alt'];
+        if (reader_enabled() && !$headers) { // prisijungimo slapukų trečiajai šaliai nesiunčiame
+            $chain[] = 'reader';
+        }
+        if ($hasService) {
+            $chain[] = 'service';
+        }
+        if (!empty($w['render_js'])) {
+            // „Visada per naršyklę“ (JS puslapiams) – tiesioginis būdas nieko neduotų
+            $browser = array_values(array_filter(['service', 'reader'], fn($s) => in_array($s, $chain, true)));
+            $chain = $browser ?: $chain;
+        }
     }
-    if ($hasService) {
-        $chain[] = 'service';
+    // Namų kompiuteriai – kraštinis variantas (kai serveris blokuojamas), arba vienintelis
+    if (($checkFrom === 'auto' || $checkFrom === 'agent') && $hasAgents) {
+        $chain[] = 'agent';
     }
-    if (!empty($w['render_js'])) {
-        // „Visada per naršyklę“ (JS puslapiams) – tiesioginis būdas nieko neduotų
-        $browser = array_values(array_filter(['service', 'reader'], fn($s) => in_array($s, $chain, true)));
-        $chain = $browser ?: $chain;
+    if (!$chain) {
+        return ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'blocked' => true, 'via' => '',
+            'error' => $checkFrom === 'agent' ? 'Nepridėta nė vieno tikrinimo taško (namų kompiuterio)' : 'Nėra tinkamo tikrinimo būdo'];
     }
     $remembered = (string)($w['fetch_via'] ?? '');
     $retryDirect = false;
-    if (in_array($remembered, ['reader', 'service'], true) && !empty($w['id']) && empty($w['render_js'])) {
+    if (in_array($remembered, ['reader', 'service', 'agent'], true) && !empty($w['id']) && empty($w['render_js'])) {
         // Kartą per parą vėl pabandome nemokamą tiesioginį būdą – gal svetainė nebeblokuoja
         $key = 'direct_retry_' . (int)$w['id'];
         if (time() - (int)setting($key, '0') > 86400) {
@@ -107,6 +121,10 @@ function fetch_for_watch(array $w, bool $remember = true): array
             case 'reader':
                 $r = fetch_reader($url);
                 break;
+            case 'agent':
+                $r = agent_fetch($url, $headers, $ua, !empty($w['render_js']));
+                $r['final_url'] = $r['final_url'] ?: $url;
+                break;
             default:
                 $r = fetch_url(service_url($url), 120, [], 'desktop', 2, false, true);
                 if ($r['ok'] && is_block_response(200, $r['body'])) {
@@ -127,19 +145,22 @@ function fetch_for_watch(array $w, bool $remember = true): array
             }
             return $r;
         }
-        if (!$r['blocked'] && ($via === 'direct' || $via === 'direct-alt')) {
-            // Ne blokavimas (pvz. 404, neteisingas adresas) – kiti būdai nepadės
+        if (!$r['blocked'] && (int)$r['status'] >= 200) {
+            // Tikras svetainės atsakymas (pvz. 404) – kiti būdai to nepataisys
             return $r;
         }
-        $blocked = $r;
+        $blocked = $r; // blokavimas arba ryšio triktis – bandome kitą būdą
     }
 
     $res = $blocked ?? $first;
+    $hadAgent = in_array('agent', $chain, true);
     if ($res['via'] !== 'service' || !str_contains($res['error'], 'API raktą')) {
         $res['error'] = 'Svetainė blokuoja automatinius tikrinimus (apsauga nuo robotų, HTTP ' . $res['status'] . '). '
-            . ($hasService
-                ? 'Nepadėjo ir apėjimo paslauga – pabandykite kitą paslaugą.'
-                : 'Įjunkite apėjimo paslaugą: Nustatymai → „Apsaugos nuo robotų apėjimas“.');
+            . ($hadAgent
+                ? 'Nepadėjo ir namų kompiuteriai.'
+                : ($hasService
+                    ? 'Nepadėjo ir apėjimo paslauga – pabandykite kitą paslaugą.'
+                    : 'Įjunkite apėjimo paslaugą arba namų kompiuterius: Nustatymai.'));
     }
     return $res;
 }

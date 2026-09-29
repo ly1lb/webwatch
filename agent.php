@@ -1,0 +1,121 @@
+<?php
+declare(strict_types=1);
+
+/*
+ * Namų agentų API.
+ *   GET  ?action=poll&wait=25          – laukia darbo (ilga užklausa)
+ *   POST ?action=result&id=N           – grąžina parsiųstą puslapį (turinys – užklausos kūnas)
+ *   GET  ?action=script&os=win|unix&t= – agento programa su įrašytu raktu
+ * Autentifikacija: antraštė X-Agent-Token (arba t= parametras programos atsisiuntimui).
+ */
+
+require __DIR__ . '/lib/bootstrap.php';
+
+header('Cache-Control: no-store');
+$action = (string)($_GET['action'] ?? '');
+
+function agent_out(array $data, int $code = 200): never
+{
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+$token = (string)($_SERVER['HTTP_X_AGENT_TOKEN'] ?? ($_GET['t'] ?? ''));
+$agent = agent_by_token($token);
+if (!$agent) {
+    usleep(500000);
+    agent_out(['error' => 'Neteisingas agento raktas. Sugeneruokite naują WebWatch nustatymuose.'], 403);
+}
+
+if ($action === 'script') {
+    $os = ($_GET['os'] ?? '') === 'win' ? 'win' : 'unix';
+    $file = __DIR__ . '/agent/' . ($os === 'win' ? 'agent.ps1' : 'agent.py');
+    $script = str_replace(
+        ['__WW_SERVER__', '__WW_TOKEN__', '__WW_NAME__'],
+        [app_url(), $agent['token'], preg_replace('/[^\w .-]/u', '', (string)$agent['name'])],
+        (string)file_get_contents($file)
+    );
+    header('Content-Type: text/plain; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . ($os === 'win' ? 'ww-agent.ps1' : 'ww-agent.py') . '"');
+    echo $script;
+    exit;
+}
+
+$db = db();
+$touch = function () use ($db, $agent) {
+    $info = mb_substr(trim((string)($_GET['os'] ?? '') . ' ' . (string)($_GET['v'] ?? '') . ' ' . (string)($_GET['browser'] ?? '')), 0, 120);
+    $db->prepare('UPDATE agents SET last_seen = ?, last_ip = ?, info = ? WHERE id = ?')
+        ->execute([time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $info, $agent['id']]);
+};
+
+if ($action === 'poll') {
+    ignore_user_abort(false);
+    $wait = max(0, min(25, (int)($_GET['wait'] ?? 25)));
+    @set_time_limit($wait + 20);
+    $deadline = microtime(true) + $wait;
+    $touch();
+    $lastTouch = time();
+    $find = $db->prepare("SELECT id FROM agent_requests WHERE status = 'pending' AND target_agent = ? ORDER BY id LIMIT 1");
+    do {
+        // Darbą paima tik tas kompiuteris, kuriam jis skirtas (perdavimo tvarka tvarkoma serveryje)
+        $find->execute([$agent['id']]);
+        $row = $find->fetch();
+        $find->closeCursor();
+        if ($row) {
+            $claim = $db->prepare("UPDATE agent_requests SET status = 'claimed', agent_id = ?, claimed = ? WHERE id = ? AND status = 'pending'");
+            $claim->execute([$agent['id'], time(), $row['id']]);
+            if ($claim->rowCount() === 1) {
+                $st = $db->prepare('SELECT id, url, headers, ua, browser FROM agent_requests WHERE id = ?');
+                $st->execute([$row['id']]);
+                $job = $st->fetch();
+                $headers = [];
+                foreach (parse_header_lines((string)$job['headers']) as $h) {
+                    [$k, $v] = array_map('trim', explode(':', $h, 2));
+                    $headers[$k] = $v;
+                }
+                agent_out(['job' => [
+                    'id' => (int)$job['id'],
+                    'url' => $job['url'],
+                    'ua' => $job['ua'],
+                    'headers' => (object)$headers,
+                    'browser' => (bool)$job['browser'],
+                ]]);
+            }
+        }
+        if (connection_aborted()) {
+            exit;
+        }
+        if (time() - $lastTouch >= 10) {
+            $touch();
+            $lastTouch = time();
+        }
+        usleep(500000);
+    } while (microtime(true) < $deadline);
+    agent_out(['job' => null]);
+}
+
+if ($action === 'result') {
+    $id = (int)($_GET['id'] ?? 0);
+    $st = $db->prepare("SELECT id FROM agent_requests WHERE id = ? AND agent_id = ? AND status = 'claimed'");
+    $st->execute([$id, $agent['id']]);
+    if (!$st->fetch()) {
+        agent_out(['ok' => false, 'error' => 'Užklausa nebegalioja']);
+    }
+    $body = (string)file_get_contents('php://input', false, null, 0, 8 * 1024 * 1024);
+    $up = $db->prepare("UPDATE agent_requests SET status = 'done', http_status = :status, body = :body, final_url = :final,
+        content_type = :ctype, via = :via, error = :error WHERE id = :id");
+    $up->bindValue(':status', (int)($_SERVER['HTTP_X_STATUS'] ?? 0), PDO::PARAM_INT);
+    $up->bindValue(':body', $body, PDO::PARAM_LOB);
+    $up->bindValue(':final', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_FINAL_URL'] ?? '')), 0, 2000));
+    $up->bindValue(':ctype', mb_substr((string)($_SERVER['HTTP_X_CONTENT_TYPE'] ?? ''), 0, 200));
+    $up->bindValue(':via', mb_substr((string)($_SERVER['HTTP_X_VIA'] ?? ''), 0, 20));
+    $up->bindValue(':error', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_ERROR'] ?? '')), 0, 500));
+    $up->bindValue(':id', $id, PDO::PARAM_INT);
+    $up->execute();
+    $db->prepare('UPDATE agents SET jobs_done = jobs_done + 1, last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);
+    agent_out(['ok' => true]);
+}
+
+agent_out(['error' => 'Nežinomas veiksmas'], 404);
