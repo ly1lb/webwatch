@@ -103,7 +103,16 @@ if ($action === 'result') {
     if (!$st->fetch()) {
         agent_out(['ok' => false, 'error' => 'Užklausa nebegalioja']);
     }
-    $body = (string)file_get_contents('php://input', false, null, 0, 8 * 1024 * 1024);
+    $body = (string)file_get_contents('php://input', false, null, 0, 12 * 1024 * 1024);
+    // Turinys atkeliauja suspaustas ir base64 (kad hostingo WAF nemuštų HTML POST)
+    if (($_SERVER['HTTP_X_BODY_ENCODING'] ?? '') === 'gzip+base64') {
+        $dec = base64_decode($body, true);
+        $un = $dec !== false ? @gzdecode($dec) : false;
+        $body = $un !== false ? $un : (string)$dec;
+    }
+    if (strlen($body) > 8 * 1024 * 1024) {
+        $body = substr($body, 0, 8 * 1024 * 1024);
+    }
     $up = $db->prepare("UPDATE agent_requests SET status = 'done', http_status = :status, body = :body, final_url = :final,
         content_type = :ctype, via = :via, error = :error WHERE id = :id");
     $up->bindValue(':status', (int)($_SERVER['HTTP_X_STATUS'] ?? 0), PDO::PARAM_INT);

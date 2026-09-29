@@ -33,7 +33,7 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "2"
+VERSION = "3"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 45
@@ -207,22 +207,53 @@ def fetch(job):
 
 
 def send_result(job_id, status, body, final_url, ctype, error):
+    import base64
     from urllib.parse import quote
+    # Turinį suspaudžiam ir užkoduojam base64 – kad hostingo WAF (ModSecurity)
+    # neatmestų POST su HTML/skriptų turiniu (dažna „neatsakė laiku“ priežastis).
+    payload = base64.b64encode(gzip.compress(body or b""))
     headers = {
         "X-Status": str(status),
         "X-Final-Url": quote(final_url or "", safe=""),
         "X-Content-Type": (ctype or "")[:200],
         "X-Via": NAME[:20],
         "X-Error": quote((error or "")[:500], safe=""),
-        "Content-Type": "application/octet-stream",
+        "X-Body-Encoding": "gzip+base64",
+        "Content-Type": "text/plain",
     }
-    api("result", "&id=%d" % job_id, data=body or b"", headers=headers, timeout=60).read()
+    last = None
+    for attempt in range(3):
+        try:
+            api("result", "&id=%d" % job_id, data=payload, headers=headers, timeout=60).read()
+            return
+        except Exception as e:  # noqa
+            last = e
+            time.sleep(2)
+    raise last if last else RuntimeError("nepavyko grąžinti rezultato")
+
+
+LOG_PATH = os.path.join(os.path.expanduser("~"), ".wwagent", "agent.log")
+
+
+def log(msg):
+    line = time.strftime("%Y-%m-%d %H:%M:%S ") + msg
+    print(line, flush=True)
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        if os.path.getsize(LOG_PATH) > 1024 * 1024:  # laikome ~1 MB
+            data = open(LOG_PATH, encoding="utf-8").read()[-400000:]
+            open(LOG_PATH, "w", encoding="utf-8").write(data)
+    except Exception:
+        pass
 
 
 def run():
     browser = platform.system() + " " + platform.release()
-    print("WebWatch tikrinimo taškas „%s“ paleistas. Serveris: %s" % (NAME, SERVER))
-    print("Palikite šį langą atidarytą (arba naudokite --install automatiniam paleidimui).")
+    log("WebWatch tikrinimo taškas „%s“ (v%s) paleistas. Serveris: %s" % (NAME, VERSION, SERVER))
+    log("Žurnalas: %s" % LOG_PATH)
+    browser_path()  # iš karto pranešam, ar rasta naršyklė
     idle_backoff = 2
     while True:
         try:
@@ -235,25 +266,25 @@ def run():
             if not job:
                 idle_backoff = 2
                 continue
-            print("→ Tikrinu: %s" % job["url"])
+            log("→ Tikrinu: %s" % job["url"])
             status, body, final_url, ctype, error = fetch(job)
             send_result(job["id"], status, body, final_url, ctype, error)
-            print("  atsakyta (HTTP %s%s)" % (status, ", klaida: " + error if error else ""))
+            log("  grąžinta serveriui (HTTP %s%s, %d baitų)" % (status, ", klaida: " + error if error else "", len(body or b"")))
             idle_backoff = 2
         except urllib.error.HTTPError as e:
             if e.code == 403:
-                print("KLAIDA: serveris nebeatpažįsta šio kompiuterio (403) – raktas pakeistas arba taškas ištrintas.")
-                print("       WebWatch nustatymuose prie šio taško spauskite „Įdiegti“ ir paleiskite komandą iš naujo.")
+                log("KLAIDA: serveris nebeatpažįsta šio kompiuterio (403) – raktas pakeistas arba taškas ištrintas.")
+                log("       WebWatch nustatymuose prie šio taško spauskite „Įdiegti“ ir paleiskite komandą iš naujo.")
                 time.sleep(60)
             else:
-                print("Serverio klaida HTTP %s – bandau vėl po %ss" % (e.code, idle_backoff))
+                log("Serverio klaida grąžinant (HTTP %s) – gali blokuoti hostingo apsauga (WAF). Bandau vėl po %ss" % (e.code, idle_backoff))
                 time.sleep(idle_backoff)
                 idle_backoff = min(idle_backoff * 2, 60)
         except KeyboardInterrupt:
-            print("\nSustabdyta.")
+            log("Sustabdyta.")
             return
         except Exception as e:  # noqa
-            print("Nėra ryšio su serveriu (%s) – bandau vėl po %ss" % (e, idle_backoff))
+            log("Nėra ryšio su serveriu (%s) – bandau vėl po %ss" % (e, idle_backoff))
             time.sleep(idle_backoff)
             idle_backoff = min(idle_backoff * 2, 60)
 

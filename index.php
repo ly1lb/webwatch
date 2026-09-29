@@ -1011,8 +1011,11 @@ function view_settings(?array $flash): void
             <b>Google Chrome</b> arba <b>Microsoft Edge</b> – agentas tokius puslapius automatiškai parsiųs per tikrą naršyklę
             (tikras atspaudas ir JavaScript), o būtent to apsaugos ir tikrina.</p>
         <p class="hint">ℹ️ <b>Norint prijungti kompiuterį iš naujo</b> (pvz. atnaujinus programą) – <b>netrinkite</b> taško, o spauskite
-            <b>„Įdiegti“</b> ir paleiskite komandą tame kompiuteryje. Trynimas pakeičia raktą, todėl senoji programa nustoja veikti.
-            „Neatsakė laiku“ paprastai reiškia seną arba pakibusią agento programą – atnaujinkite ją tame kompiuteryje.</p>
+            <b>„Įdiegti“</b> ir paleiskite komandą tame kompiuteryje. Trynimas pakeičia raktą, todėl senoji programa nustoja veikti.</p>
+        <p class="hint">🩺 Jei rodo „neatsakė laiku“, priežastį matysite tame kompiuteryje: agento žurnale
+            <code>~/.wwagent/agent.log</code> (Mac/Linux) arba <code>%APPDATA%\WWAgent\agent.log</code> (Windows).
+            Dažniausia priežastis – sena agento versija (atnaujinkite) arba hostingo apsauga (WAF), atmetanti rezultato siuntimą –
+            nuo šios versijos turinys siunčiamas suspaustas, kad to išvengtų.</p>
         <?php
         $agents = agents_all();
         $newId = (int)($_GET['agent'] ?? 0);

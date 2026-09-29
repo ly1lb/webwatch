@@ -12,10 +12,21 @@ param([switch]$Install, [switch]$Uninstall)
 $Server = "__WW_SERVER__"
 $Token  = "__WW_TOKEN__"
 $Name   = "__WW_NAME__"
-$Version = "1"
+$Version = "3"
 $PollWait = 25
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+
+$LogPath = Join-Path $env:APPDATA "WWAgent\agent.log"
+function Log($msg) {
+    $line = (Get-Date -Format "yyyy-MM-dd HH:mm:ss ") + $msg
+    Write-Host $line
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $LogPath) | Out-Null
+        Add-Content -Path $LogPath -Value $line -ErrorAction SilentlyContinue
+        if ((Get-Item $LogPath).Length -gt 1MB) { (Get-Content $LogPath -Tail 3000) | Set-Content $LogPath }
+    } catch {}
+}
 
 function Install-Agent {
     $dstDir = Join-Path $env:APPDATA "WWAgent"
@@ -87,7 +98,7 @@ function Invoke-BrowserFetch($url, $ua) {
     }
 }
 
-Write-Host "WebWatch tikrinimo taskas '$Name' paleistas. Serveris: $Server"
+Log "WebWatch tikrinimo taskas '$Name' paleistas. Serveris: $Server"
 Write-Host "Palikite si langa atidaryta (arba naudokite -Install automatiniam paleidimui)."
 
 $backoff = 2
@@ -98,7 +109,7 @@ while ($true) {
         $resp = Invoke-RestMethod -Uri $pollUrl -Headers @{ "X-Agent-Token" = $Token } -TimeoutSec ($PollWait + 15)
         if (-not $resp.job) { $backoff = 2; continue }
         $job = $resp.job
-        Write-Host "-> Tikrinu: $($job.url)"
+        Log "-> Tikrinu: $($job.url)"
 
         $h = @{ "User-Agent" = $job.ua; "Accept-Language" = "lt-LT,lt;q=0.9,en;q=0.8" }
         if ($job.headers) { $job.headers.PSObject.Properties | ForEach-Object { if ($_.Name) { $h[$_.Name] = $_.Value } } }
@@ -123,11 +134,16 @@ while ($true) {
         # Uzblokuota arba reikia JS -> per vietine narsykle (tikras atspaudas)
         $bodyTxt = if ($bodyBytes.Length) { [Text.Encoding]::UTF8.GetString($bodyBytes, 0, [Math]::Min(30000, $bodyBytes.Length)) } else { "" }
         if ($job.browser -or $status -in 401,403,405,406,429,451,503 -or ($bodyTxt -match $ChallengeRe)) {
-            if (-not $job.browser) { Write-Host "  uzblokuota (HTTP $status) - bandau per vietine narsykle..." }
+            if (-not $job.browser) { Log "  uzblokuota (HTTP $status) - bandau per vietine narsykle..." }
             $b = Invoke-BrowserFetch $job.url $job.ua
             if ($b) { $status = $b.status; $bodyBytes = $b.body; $ctype = $b.ctype; $err = $b.err; $finalUrl = $job.url }
         }
 
+        # Suspaudziam + base64, kad hostingo WAF neatmestu HTML POST
+        $ms = New-Object IO.MemoryStream
+        $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Compress)
+        $gz.Write($bodyBytes, 0, $bodyBytes.Length); $gz.Close()
+        $payload = [Convert]::ToBase64String($ms.ToArray())
         $headers = @{
             "X-Agent-Token" = $Token
             "X-Status" = "$status"
@@ -135,20 +151,28 @@ while ($true) {
             "X-Content-Type" = $ctype
             "X-Via" = $Name
             "X-Error" = [Uri]::EscapeDataString($err)
-            "Content-Type" = "application/octet-stream"
+            "X-Body-Encoding" = "gzip+base64"
+            "Content-Type" = "text/plain"
         }
-        Invoke-RestMethod -Uri "$($Server)agent.php?action=result&id=$($job.id)" -Method Post -Headers $headers -Body $bodyBytes -TimeoutSec 60 | Out-Null
-        Write-Host "  atsakyta (HTTP $status$(if($err){', klaida: '+$err}))"
+        $sent = $false
+        for ($try = 0; $try -lt 3 -and -not $sent; $try++) {
+            try {
+                Invoke-RestMethod -Uri "$($Server)agent.php?action=result&id=$($job.id)" -Method Post -Headers $headers -Body $payload -TimeoutSec 60 | Out-Null
+                $sent = $true
+            } catch { Start-Sleep -Seconds 2 }
+        }
+        if ($sent) { Log "  grazinta serveriui (HTTP $status$(if($err){', klaida: '+$err}), $($bodyBytes.Length) baitu)" }
+        else { Log "  KLAIDA: nepavyko grazinti rezultato serveriui (gali blokuoti hostingo WAF)" }
         $backoff = 2
     } catch {
         $code = $null
         if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
         if ($code -eq 403) {
-            Write-Host "KLAIDA: serveris nebeatpazysta sio kompiuterio (403) - raktas pakeistas arba taskas istrintas."
-            Write-Host "       WebWatch nustatymuose prie sio tasko spauskite 'Idiegti' ir paleiskite komanda is naujo."
+            Log "KLAIDA: serveris nebeatpazysta sio kompiuterio (403) - raktas pakeistas arba taskas istrintas."
+            Log "       WebWatch nustatymuose prie sio tasko spauskite 'Idiegti' ir paleiskite komanda is naujo."
             Start-Sleep -Seconds 60
         } else {
-            Write-Host "Nera rysio su serveriu ($($_.Exception.Message)) - bandau vel po $backoff s"
+            Log "Nera rysio su serveriu ($($_.Exception.Message)) - bandau vel po $backoff s"
             Start-Sleep -Seconds $backoff
             $backoff = [Math]::Min($backoff * 2, 60)
         }
