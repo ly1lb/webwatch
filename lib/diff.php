@@ -131,7 +131,50 @@ function diff_summary(array $ops, int $maxLines = 4, int $maxLen = 240): string
     return $s;
 }
 
-/** HTML atvaizdavimas su kontekstu aplink pakeitimus. */
+/**
+ * Žodžių lygio skirtumas tarp dviejų eilučių.
+ * Grąžina [senos eilutės HTML su <del>, naujos eilutės HTML su <ins>].
+ */
+function word_diff(string $old, string $new): array
+{
+    $a = preg_split('/(\s+)/u', $old, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [];
+    $b = preg_split('/(\s+)/u', $new, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [];
+    $n = count($a);
+    $m = count($b);
+    if ($n * $m > 40000) { // labai ilgoms eilutėms – be žodžių lygio
+        return [h($old), h($new)];
+    }
+    $dp = array_fill(0, $n + 1, array_fill(0, $m + 1, 0));
+    for ($i = $n - 1; $i >= 0; $i--) {
+        for ($j = $m - 1; $j >= 0; $j--) {
+            $dp[$i][$j] = $a[$i] === $b[$j] ? $dp[$i + 1][$j + 1] + 1 : max($dp[$i + 1][$j], $dp[$i][$j + 1]);
+        }
+    }
+    $oldHtml = '';
+    $newHtml = '';
+    $i = $j = 0;
+    while ($i < $n && $j < $m) {
+        if ($a[$i] === $b[$j]) {
+            $oldHtml .= h($a[$i]);
+            $newHtml .= h($b[$j]);
+            $i++;
+            $j++;
+        } elseif ($dp[$i + 1][$j] >= $dp[$i][$j + 1]) {
+            $oldHtml .= '<del>' . h($a[$i++]) . '</del>';
+        } else {
+            $newHtml .= '<ins>' . h($b[$j++]) . '</ins>';
+        }
+    }
+    while ($i < $n) {
+        $oldHtml .= '<del>' . h($a[$i++]) . '</del>';
+    }
+    while ($j < $m) {
+        $newHtml .= '<ins>' . h($b[$j++]) . '</ins>';
+    }
+    return [$oldHtml, $newHtml];
+}
+
+/** HTML atvaizdavimas su kontekstu aplink pakeitimus ir žodžių lygio paryškinimu. */
 function diff_html(array $ops, int $context = 3): string
 {
     $n = count($ops);
@@ -145,9 +188,11 @@ function diff_html(array $ops, int $context = 3): string
     }
     $out = '';
     $skipped = false;
-    for ($i = 0; $i < $n; $i++) {
+    $i = 0;
+    while ($i < $n) {
         if (!$show[$i]) {
             $skipped = true;
+            $i++;
             continue;
         }
         if ($skipped) {
@@ -155,9 +200,18 @@ function diff_html(array $ops, int $context = 3): string
             $skipped = false;
         }
         [$op, $line] = $ops[$i];
+        // Pakeista eilutė = „−“ iškart po kurios „+“: rodome žodžių lygio pakeitimus
+        if ($op === '-' && $i + 1 < $n && $ops[$i + 1][0] === '+') {
+            [$oldH, $newH] = word_diff($line, $ops[$i + 1][1]);
+            $out .= '<div class="d-del"><span class="d-sign">−</span>' . $oldH . '</div>';
+            $out .= '<div class="d-add"><span class="d-sign">+</span>' . $newH . '</div>';
+            $i += 2;
+            continue;
+        }
         $cls = $op === '+' ? 'd-add' : ($op === '-' ? 'd-del' : 'd-eq');
         $sign = $op === '=' ? ' ' : ($op === '+' ? '+' : '−');
         $out .= '<div class="' . $cls . '"><span class="d-sign">' . $sign . '</span>' . h($line) . '</div>';
+        $i++;
     }
     if ($skipped && $out !== '') {
         $out .= '<div class="d-skip">⋯</div>';

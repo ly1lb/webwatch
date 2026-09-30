@@ -533,26 +533,28 @@ function view_list(?array $flash): void
         <?php foreach ($watches as $w): ?>
             <a class="watch-card <?= $w['active'] ? '' : 'paused' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>"
                data-search="<?= h(mb_strtolower(watch_title($w) . ' ' . $w['url'] . ' ' . $w['tags'])) ?>" data-tags="<?= h(mb_strtolower(implode('|', tag_list((string)$w['tags'])))) ?>">
-                <div class="wc-top">
-                    <?= status_dot($w) ?>
-                    <strong class="wc-title"><?= h(watch_title($w)) ?></strong>
-                    <?php if ($w['unseen'] > 0): ?><span class="badge"><?= (int)$w['unseen'] ?></span><?php endif; ?>
+                <?= status_dot($w) ?>
+                <div class="wc-body">
+                    <div class="wc-top">
+                        <strong class="wc-title"><?= h(watch_title($w)) ?></strong>
+                        <?php if ($w['compare_mode'] === 'number' && ($vh = json_decode((string)$w['value_history'], true))): ?>
+                            <span class="wc-value"><?= h(format_number((float)end($vh)[1])) ?></span>
+                        <?php endif; ?>
+                        <?php if ($w['unseen'] > 0): ?><span class="badge"><?= (int)$w['unseen'] ?></span><?php endif; ?>
+                    </div>
+                    <div class="wc-url"><?= h(preg_replace('~^https?://(www\.)?~', '', (string)$w['url'])) ?></div>
+                    <div class="wc-meta">
+                        <span><?= h(compare_modes()[$w['compare_mode']][0] ?? '') ?><?= $w['selector'] !== '' ? ' · elementas' : '' ?></span>
+                        <span>Pokytis: <?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></span>
+                        <span class="wc-check">Tikrinta: <?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></span>
+                    </div>
+                    <?php if ($w['tags'] !== ''): ?>
+                        <div class="wc-tags"><?php foreach (tag_list((string)$w['tags']) as $t): ?><span class="tag"><?= h($t) ?></span><?php endforeach; ?></div>
+                    <?php endif; ?>
+                    <?php if ($w['last_status'] === 'error'): ?>
+                        <div class="wc-error">⚠️ <?= h($w['last_error']) ?></div>
+                    <?php endif; ?>
                 </div>
-                <div class="wc-url"><?= h(preg_replace('~^https?://(www\.)?~', '', (string)$w['url'])) ?></div>
-                <div class="wc-meta">
-                    <span><?= h(compare_modes()[$w['compare_mode']][0] ?? '') ?><?= $w['selector'] !== '' ? ' · elementas' : '' ?></span>
-                    <span>Pokytis: <?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></span>
-                    <span class="wc-check">Tikrinta: <?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></span>
-                </div>
-                <?php if ($w['compare_mode'] === 'number' && ($vh = json_decode((string)$w['value_history'], true))): ?>
-                    <div class="wc-value"><?= h(format_number((float)end($vh)[1])) ?></div>
-                <?php endif; ?>
-                <?php if ($w['tags'] !== ''): ?>
-                    <div class="wc-tags"><?php foreach (tag_list((string)$w['tags']) as $t): ?><span class="tag"><?= h($t) ?></span><?php endforeach; ?></div>
-                <?php endif; ?>
-                <?php if ($w['last_status'] === 'error'): ?>
-                    <div class="wc-error">⚠️ <?= h($w['last_error']) ?></div>
-                <?php endif; ?>
             </a>
         <?php endforeach; ?>
         </div>
@@ -1114,14 +1116,18 @@ function view_settings(?array $flash): void
     </section>
 
     <section class="card">
-        <h2>🔑 Slaptažodis</h2>
-        <form method="post" class="form">
-            <?= csrf_field() ?>
-            <input type="hidden" name="do" value="change_password">
-            <label>Dabartinis<input type="password" name="old" required autocomplete="current-password"></label>
-            <label>Naujas<input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
-            <button class="btn">Pakeisti</button>
-        </form>
+        <!-- Slaptažodžio laukai paslėpti, kol neatidaroma – kitaip naršyklės slaptažodžių
+             pildymas „nušoka“ prie jų spustelėjus bet kur nustatymuose. -->
+        <details>
+            <summary><b>🔑 Keisti slaptažodį</b></summary>
+            <form method="post" class="form" style="margin-top:10px">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="change_password">
+                <label>Dabartinis<input type="password" name="old" required autocomplete="current-password"></label>
+                <label>Naujas<input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
+                <button class="btn">Pakeisti</button>
+            </form>
+        </details>
     </section>
 
     <?php if ($logs): ?>

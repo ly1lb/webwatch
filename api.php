@@ -23,7 +23,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !check_csrf($_SERVER['HTTP_X_CSRF']
     out(['ok' => false, 'error' => 'Neteisinga užklausa (CSRF)'], 400);
 }
 remember_app_url();
-@set_time_limit(120);
+// Atleidžiam sesijos užraktą, kad ilgas tikrinimas (per namų kompiuterį) neužstabdytų kitų langų
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+@set_time_limit(180);
 
 try {
     switch ($action) {
@@ -72,11 +76,12 @@ try {
                 'headers' => (string)($input['headers'] ?? ''),
                 'user_agent' => (string)($input['user_agent'] ?? 'mobile'),
                 'render_js' => !empty($input['render_js']),
+                'check_from' => in_array($input['check_from'] ?? '', ['server', 'auto', 'agent'], true) ? $input['check_from'] : (agents_all() ? 'auto' : 'server'),
             ];
             if (!preg_match('~^https?://~i', $w['url'])) {
                 out(['ok' => false, 'error' => 'Įrašykite adresą (https://...)']);
             }
-            $f = fetch_for_watch($w);
+            $f = fetch_for_watch($w, false);
             if (!$f['ok']) {
                 out(['ok' => false, 'error' => $f['error']]);
             }

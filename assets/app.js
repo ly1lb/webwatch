@@ -230,6 +230,7 @@
         headers: $('#f-headers').value,
         user_agent: $('#f-ua').value,
         render_js: $('#f-render-js').checked,
+        check_from: (form.querySelector('select[name="check_from"]') || {}).value || '',
         selector: scope === 'element' ? $('#f-selector').value : '',
         compare_mode: form.querySelector('input[name="compare_mode"]:checked').value,
         keyword: $('#f-keyword').value,
@@ -315,6 +316,9 @@
       var q = 'preview.php?url=' + encodeURIComponent(url) + '&ua=' + encodeURIComponent($('#f-ua').value);
       if ($('#f-render-js').checked) q += '&js=1';
       if ($('#f-headers').value.trim()) q += '&h=' + encodeURIComponent($('#f-headers').value);
+      var cf = (form.querySelector('select[name="check_from"]') || {}).value;
+      if (cf) q += '&cf=' + encodeURIComponent(cf);
+      info.textContent = 'Kraunamas puslapis… (jei per namų kompiuterį – gali užtrukti kelias sekundes)';
       frame.src = q;
       picker.hidden = false;
       document.body.classList.add('noscroll');

@@ -32,9 +32,18 @@ if (!$agent) {
 if ($action === 'script') {
     $os = ($_GET['os'] ?? '') === 'win' ? 'win' : 'unix';
     $file = __DIR__ . '/agent/' . ($os === 'win' ? 'agent.ps1' : 'agent.py');
+    // Serverio adresą imame iš nustatymų, o jei jų dar nėra – iš šios užklausos
+    $server = app_url();
+    if ($server === '' || $server === '/') {
+        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+            || (($_SERVER['SERVER_PORT'] ?? '') === '443');
+        $dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+        $server = ($https ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . $dir . '/';
+    }
     $script = str_replace(
         ['__WW_SERVER__', '__WW_TOKEN__', '__WW_NAME__'],
-        [app_url(), $agent['token'], preg_replace('/[^\w .-]/u', '', (string)$agent['name'])],
+        [$server, $agent['token'], preg_replace('/[^\w .-]/u', '', (string)$agent['name'])],
         (string)file_get_contents($file)
     );
     header('Content-Type: text/plain; charset=utf-8');

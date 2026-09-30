@@ -12,6 +12,11 @@ if (!is_logged_in()) {
     http_response_code(401);
     exit('Neprisijungta');
 }
+// Atleidžiam sesijos užraktą – tikrinimas per namų kompiuterį gali užtrukti,
+// o kiti puslapiai tuo metu neturi užstrigti.
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
 
 $url = trim((string)($_GET['url'] ?? ''));
 $nonce = base64_encode(random_bytes(12));
@@ -20,12 +25,16 @@ header('Cache-Control: no-store');
 header("Content-Security-Policy: sandbox allow-scripts; script-src 'nonce-$nonce'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri *");
 header('Referrer-Policy: no-referrer');
 
+// Puslapį parinkikliui imame ta pačia grandine kaip ir stebint: jei serveris
+// blokuojamas, per namų kompiuterius. 'auto' – serveris, tada kompiuteriai.
+$cf = in_array($_GET['cf'] ?? '', ['server', 'auto', 'agent'], true) ? $_GET['cf'] : (agents_all() ? 'auto' : 'server');
 $f = fetch_for_watch([
     'url' => $url,
     'headers' => (string)($_GET['h'] ?? ''),
     'user_agent' => (string)($_GET['ua'] ?? 'mobile'),
     'render_js' => !empty($_GET['js']),
-]);
+    'check_from' => $cf,
+], false);
 if (!$f['ok']) {
     echo '<!doctype html><meta charset="utf-8"><body style="font:16px -apple-system,sans-serif;padding:24px;color:#b91c1c">'
         . h($f['error']) . '</body>';

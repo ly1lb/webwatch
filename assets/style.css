@@ -143,15 +143,17 @@ input.copy { font-size: 13px; }
 
 .list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .watch-list { display: grid; gap: 10px; }
-.watch-card { display: block; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; color: var(--text); box-shadow: var(--shadow); }
+.watch-card { display: flex; align-items: flex-start; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; color: var(--text); box-shadow: var(--shadow); }
+.watch-card > .dot { margin-top: 6px; }
+.wc-body { flex: 1; min-width: 0; }
 .watch-card.paused { opacity: .6; }
 .watch-card.checking { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .5; } }
-.wc-top { display: flex; align-items: center; gap: 8px; }
-.wc-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wc-url { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 0 6px 18px; }
-.wc-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--muted); margin-left: 18px; }
-.wc-error { font-size: .82rem; color: var(--err); margin: 6px 0 0 18px; }
+.wc-top { display: flex; align-items: baseline; gap: 8px; }
+.wc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wc-url { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 0 6px; }
+.wc-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--muted); }
+.wc-error { font-size: .82rem; color: var(--err); margin: 6px 0 0; word-break: break-word; }
 .badge { background: var(--err); color: #fff; border-radius: 99px; font-size: .75rem; font-weight: 700; padding: 1px 8px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 .dot.ok { background: var(--ok); }
@@ -174,9 +176,12 @@ input.copy { font-size: 13px; }
 .diff > div { padding: 3px 8px 3px 26px; position: relative; white-space: pre-wrap; word-break: break-word; }
 .d-sign { position: absolute; left: 8px; opacity: .7; }
 .d-add { background: var(--add-bg); color: var(--add-fg); }
-.d-del { background: var(--del-bg); color: var(--del-fg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--del-fg) 40%, transparent); }
+.d-del { background: var(--del-bg); color: var(--del-fg); }
 .d-eq { color: var(--muted); }
 .d-skip { text-align: center; color: var(--muted); padding: 2px !important; }
+/* Žodžių lygio paryškinimas pakeistose eilutėse */
+.d-del del { background: color-mix(in srgb, var(--del-fg) 24%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--del-fg) 55%, transparent); border-radius: 3px; }
+.d-add ins { background: color-mix(in srgb, var(--add-fg) 26%, transparent); text-decoration: none; border-radius: 3px; }
 pre.content, pre.summary, .test-result pre {
   white-space: pre-wrap; word-break: break-word; font-size: .8rem; max-height: 60vh; overflow: auto;
   background: var(--bg); padding: 10px; border-radius: 10px; margin: 0;
@@ -223,9 +228,9 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; -webkit-overflow-scrolling: touch; }
 .chip { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 99px; padding: 5px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.wc-tags { margin: 8px 0 0 18px; display: flex; gap: 5px; flex-wrap: wrap; }
+.wc-tags { margin: 8px 0 0; display: flex; gap: 5px; flex-wrap: wrap; }
 .tag { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 1px 7px; font-size: .75rem; font-weight: 600; }
-.wc-value { margin: 6px 0 0 18px; font-size: 1.25rem; font-weight: 700; }
+.wc-value { font-size: 1.1rem; font-weight: 700; white-space: nowrap; }
 .channels { border: 0; padding: 0; margin: 0 0 12px; }
 .channels legend { font-weight: 600; font-size: .92rem; margin-bottom: 8px; padding: 0; }
 .channels label.check { margin-bottom: 8px; }
