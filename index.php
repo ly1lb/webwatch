@@ -531,7 +531,8 @@ function view_list(?array $flash): void
         <?php endif; ?>
         <div class="watch-list">
         <?php foreach ($watches as $w): ?>
-            <a class="watch-card <?= $w['active'] ? '' : 'paused' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>"
+            <?php $isNew = (int)$w['unseen'] > 0; ?>
+            <a class="watch-card <?= $w['active'] ? '' : 'paused' ?> <?= $isNew ? 'is-new' : '' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>"
                data-search="<?= h(mb_strtolower(watch_title($w) . ' ' . $w['url'] . ' ' . $w['tags'])) ?>" data-tags="<?= h(mb_strtolower(implode('|', tag_list((string)$w['tags'])))) ?>">
                 <?= status_dot($w) ?>
                 <div class="wc-body">
@@ -540,12 +541,13 @@ function view_list(?array $flash): void
                         <?php if ($w['compare_mode'] === 'number' && ($vh = json_decode((string)$w['value_history'], true))): ?>
                             <span class="wc-value"><?= h(format_number((float)end($vh)[1])) ?></span>
                         <?php endif; ?>
-                        <?php if ($w['unseen'] > 0): ?><span class="badge"><?= (int)$w['unseen'] ?></span><?php endif; ?>
                     </div>
-                    <div class="wc-url"><?= h(preg_replace('~^https?://(www\.)?~', '', (string)$w['url'])) ?></div>
+                    <?php if ($isNew): ?>
+                        <div class="wc-new">🔴 Nauji pakeitimai<?= $w['unseen'] > 1 ? ' (' . (int)$w['unseen'] . ')' : '' ?> · <?= h(human_time((int)$w['last_change'])) ?></div>
+                    <?php endif; ?>
                     <div class="wc-meta">
                         <span><?= h(compare_modes()[$w['compare_mode']][0] ?? '') ?><?= $w['selector'] !== '' ? ' · elementas' : '' ?></span>
-                        <span>Pokytis: <?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></span>
+                        <?php if (!$isNew): ?><span>Pokytis: <?= h(human_time($w['last_change'] ? (int)$w['last_change'] : null)) ?></span><?php endif; ?>
                         <span class="wc-check">Tikrinta: <?= h(human_time($w['last_check'] ? (int)$w['last_check'] : null)) ?></span>
                     </div>
                     <?php if ($w['tags'] !== ''): ?>
@@ -555,6 +557,7 @@ function view_list(?array $flash): void
                         <div class="wc-error">⚠️ <?= h($w['last_error']) ?></div>
                     <?php endif; ?>
                 </div>
+                <?php if ($isNew): ?><span class="wc-chevron">›</span><?php endif; ?>
             </a>
         <?php endforeach; ?>
         </div>

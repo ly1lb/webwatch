@@ -141,17 +141,20 @@ input.copy { font-size: 13px; }
 .flash.warn { background: color-mix(in srgb, var(--warn) 16%, var(--card)); }
 .err-text { color: var(--err); display: block; }
 
-.list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.list-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.list-head > .muted { white-space: nowrap; }
 .watch-list { display: grid; gap: 10px; }
 .watch-card { display: flex; align-items: flex-start; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; color: var(--text); box-shadow: var(--shadow); }
 .watch-card > .dot { margin-top: 6px; }
 .wc-body { flex: 1; min-width: 0; }
 .watch-card.paused { opacity: .6; }
 .watch-card.checking { animation: pulse 1s infinite; }
+.watch-card.is-new { border-color: var(--accent); border-left-width: 4px; background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+.wc-new { color: var(--accent); font-weight: 700; font-size: .85rem; margin: 3px 0 4px; }
+.wc-chevron { align-self: center; color: var(--accent); font-size: 1.6rem; font-weight: 700; flex: none; }
 @keyframes pulse { 50% { opacity: .5; } }
 .wc-top { display: flex; align-items: baseline; gap: 8px; }
 .wc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wc-url { color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 0 6px; }
 .wc-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--muted); }
 .wc-error { font-size: .82rem; color: var(--err); margin: 6px 0 0; word-break: break-word; }
 .badge { background: var(--err); color: #fff; border-radius: 99px; font-size: .75rem; font-weight: 700; padding: 1px 8px; }
@@ -222,7 +225,7 @@ pre.content, pre.summary, .test-result pre {
 .toast.err { background: var(--err); }
 .toast.ok { background: #15803d; }
 
-.lh-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.lh-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: 1; }
 .lh-btns form { margin: 0; }
 input.search { margin: 0 0 10px; background: var(--card); }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; -webkit-overflow-scrolling: touch; }
