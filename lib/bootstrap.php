@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.3.5');
+define('WW_VERSION', '1.3.6');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';

@@ -312,7 +312,7 @@
       $('#f-url').value = url;
       last = null;
       info.textContent = 'Kraunamas puslapis…';
-      btns.forEach(function (b) { if (b.dataset.picker !== 'close') b.disabled = true; });
+      btns.forEach(function (b) { if (b.dataset.picker !== 'close' && b.dataset.picker !== 'declutter') b.disabled = true; });
       var q = 'preview.php?url=' + encodeURIComponent(url) + '&ua=' + encodeURIComponent($('#f-ua').value);
       if ($('#f-render-js').checked) q += '&js=1';
       if ($('#f-headers').value.trim()) q += '&h=' + encodeURIComponent($('#f-headers').value);
@@ -329,6 +329,8 @@
       var d = e.data || {};
       if (d.type === 'ww-ready') {
         info.textContent = 'Bakstelėkite vietą, kurią norite stebėti.';
+      } else if (d.type === 'ww-decluttered') {
+        toast(d.count > 0 ? 'Paslėpta juostų/užsklandų: ' + d.count : 'Nerasta ką slėpti', 'ok');
       } else if (d.type === 'ww-select') {
         last = d;
         btns.forEach(function (b) { b.disabled = false; });

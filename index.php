@@ -718,6 +718,7 @@ function view_edit(?array $flash): void
         <div class="picker-bar">
             <button type="button" class="btn small ghost" data-picker="close">✕</button>
             <span class="picker-title">Bakstelėkite elementą</span>
+            <button type="button" class="btn small ghost" data-picker="declutter" title="Paslėpti slapukų juostas ir užsklandas">🍪 Slėpti juostas</button>
         </div>
         <iframe id="picker-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Puslapio peržiūra"></iframe>
         <div class="picker-panel">
