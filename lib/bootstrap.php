@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.3.7');
+define('WW_VERSION', '1.4.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -27,10 +27,31 @@ require_once __DIR__ . '/mailer.php';
 require_once __DIR__ . '/notify.php';
 require_once __DIR__ . '/check.php';
 
+/** Naudojama DB variklio pavadinimas: 'mysql' arba 'sqlite'. */
+function ww_driver(): string
+{
+    return defined('WW_DB_HOST') && WW_DB_HOST !== '' ? 'mysql' : 'sqlite';
+}
+
 function db(): PDO
 {
     static $pdo = null;
     if ($pdo) {
+        return $pdo;
+    }
+    if (ww_driver() === 'mysql') {
+        // MySQL / MariaDB (Hostinger): jokių užraktų problemų. Nustatoma config.php faile.
+        $host = WW_DB_HOST;
+        $port = defined('WW_DB_PORT') && WW_DB_PORT ? (int)WW_DB_PORT : 3306;
+        $name = defined('WW_DB_NAME') ? WW_DB_NAME : '';
+        $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
+        $pdo = new PDO($dsn, defined('WW_DB_USER') ? WW_DB_USER : '', defined('WW_DB_PASS') ? WW_DB_PASS : '', [
+            PDO::ATTR_TIMEOUT => 15,
+        ]);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+        migrate($pdo);
         return $pdo;
     }
     if (!is_dir(WW_DATA)) {
@@ -39,128 +60,172 @@ function db(): PDO
     $pdo = new PDO('sqlite:' . WW_DATA . '/webwatch.sqlite');
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('PRAGMA journal_mode = WAL');
-    $pdo->exec('PRAGMA busy_timeout = 10000');
+    $pdo->exec('PRAGMA journal_mode = WAL');       // rašymas neblokuoja skaitymo
+    $pdo->exec('PRAGMA busy_timeout = 30000');     // laukti iki 30 s, kol bazė atsilaisvins
+    $pdo->exec('PRAGMA synchronous = NORMAL');     // saugu su WAL, trumpesni užraktai
+    $pdo->exec('PRAGMA wal_autocheckpoint = 300');
     $pdo->exec('PRAGMA foreign_keys = ON');
     migrate($pdo);
     return $pdo;
 }
 
+/** Įterpimas/atveju atnaujinimas („upsert“) – veikia su SQLite ir MySQL. */
+function db_upsert(string $table, array $keyCols, array $data): void
+{
+    $cols = array_keys($data);
+    $ph = implode(', ', array_map(fn($c) => ':' . $c, $cols));
+    $colList = implode(', ', $cols);
+    $updateCols = array_values(array_diff($cols, $keyCols));
+    if (ww_driver() === 'mysql') {
+        $set = implode(', ', array_map(fn($c) => "$c = VALUES($c)", $updateCols));
+        $sql = "INSERT INTO $table ($colList) VALUES ($ph)" . ($set ? " ON DUPLICATE KEY UPDATE $set" : '');
+    } else {
+        $set = implode(', ', array_map(fn($c) => "$c = excluded.$c", $updateCols));
+        $conflict = implode(', ', $keyCols);
+        $sql = "INSERT INTO $table ($colList) VALUES ($ph) ON CONFLICT($conflict) DO UPDATE SET $set";
+    }
+    db_retry(function () use ($sql, $data) {
+        db()->prepare($sql)->execute($data);
+    });
+}
+
+/**
+ * Įvykdo DB operaciją su pakartojimu, kai bazė laikinai užimta („database is locked“).
+ * Būtina, nes cron, „Tikrinti dabar“ ir agentų apklausos gali rašyti vienu metu.
+ */
+function db_retry(callable $fn, int $tries = 6)
+{
+    for ($i = 1; ; $i++) {
+        try {
+            return $fn();
+        } catch (PDOException $e) {
+            $msg = $e->getMessage();
+            if ($i >= $tries || (stripos($msg, 'locked') === false && stripos($msg, 'busy') === false)) {
+                throw $e;
+            }
+            usleep(random_int(150000, 500000) * $i); // didėjanti pauzė
+        }
+    }
+}
+
+/** Trumpinys: paruošia ir įvykdo rašymo užklausą su pakartojimu. */
+function db_write(string $sql, array $params = []): void
+{
+    db_retry(function () use ($sql, $params) {
+        db()->prepare($sql)->execute($params);
+    });
+}
+
 function migrate(PDO $pdo): void
 {
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS settings (
-            k TEXT PRIMARY KEY,
-            v TEXT
-        );
-        CREATE TABLE IF NOT EXISTS watches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL DEFAULT '',
-            url TEXT NOT NULL,
-            selector TEXT NOT NULL DEFAULT '',
-            compare_mode TEXT NOT NULL DEFAULT 'text',
-            keyword TEXT NOT NULL DEFAULT '',
-            number_dir TEXT NOT NULL DEFAULT 'any',
-            threshold REAL NOT NULL DEFAULT 0,
+    $mysql = ww_driver() === 'mysql';
+    $pk = $mysql ? 'INT AUTO_INCREMENT PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+    $blob = $mysql ? 'LONGBLOB' : 'BLOB';
+    // $sd – trumpas tekstas su numatyta reikšme (gali būti neįterptas). VARCHAR abiejuose leidžia DEFAULT.
+    $sd = $mysql ? "VARCHAR(1024) NOT NULL DEFAULT ''" : "TEXT NOT NULL DEFAULT ''";
+    $req = 'TEXT NOT NULL';                 // visada įterpiama reikšmė
+    $lt = $mysql ? 'LONGTEXT' : 'TEXT';     // ilgas turinys, gali būti NULL
+    $kkey = $mysql ? 'VARCHAR(191)' : 'TEXT';
+    $tok = $mysql ? 'VARCHAR(64)' : 'TEXT';
+    $endpoint = $mysql ? 'VARCHAR(512)' : 'TEXT';
+    $eng = $mysql ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : '';
+
+    $tables = [
+        "CREATE TABLE IF NOT EXISTS settings (k $kkey NOT NULL PRIMARY KEY, v $lt)$eng",
+        "CREATE TABLE IF NOT EXISTS watches (
+            id $pk,
+            name $sd, url $req, selector $sd,
+            compare_mode VARCHAR(32) NOT NULL DEFAULT 'text',
+            keyword $sd, number_dir VARCHAR(8) NOT NULL DEFAULT 'any',
+            threshold DOUBLE NOT NULL DEFAULT 0,
             ignore_numbers INTEGER NOT NULL DEFAULT 0,
-            ignore_regex TEXT NOT NULL DEFAULT '',
+            ignore_regex $sd,
             interval_min INTEGER NOT NULL DEFAULT 60,
-            notify TEXT NOT NULL DEFAULT 'auto',
+            notify $sd,
             active INTEGER NOT NULL DEFAULT 1,
-            last_check INTEGER,
-            last_change INTEGER,
-            last_status TEXT NOT NULL DEFAULT 'new',
-            last_error TEXT NOT NULL DEFAULT '',
-            last_content TEXT,
+            last_check INTEGER, last_change INTEGER,
+            last_status VARCHAR(16) NOT NULL DEFAULT 'new',
+            last_error $sd, last_content $lt,
             fail_count INTEGER NOT NULL DEFAULT 0,
             unseen INTEGER NOT NULL DEFAULT 0,
             created INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS changes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            watch_id INTEGER NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS changes (
+            id $pk,
+            watch_id INTEGER NOT NULL,
             created INTEGER NOT NULL,
-            old_content TEXT,
-            new_content TEXT,
-            summary TEXT NOT NULL DEFAULT '',
-            change_pct REAL NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_changes_watch ON changes(watch_id, created);
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            endpoint TEXT NOT NULL UNIQUE,
-            p256dh TEXT NOT NULL,
-            auth TEXT NOT NULL,
-            label TEXT NOT NULL DEFAULT '',
-            created INTEGER NOT NULL,
-            last_ok INTEGER,
-            last_error TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created INTEGER NOT NULL,
-            channels TEXT NOT NULL,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            url TEXT NOT NULL,
-            tag TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS agents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            token TEXT NOT NULL UNIQUE,
-            created INTEGER NOT NULL,
-            last_seen INTEGER,
-            last_ip TEXT NOT NULL DEFAULT '',
-            info TEXT NOT NULL DEFAULT '',
-            jobs_done INTEGER NOT NULL DEFAULT 0,
-            fails INTEGER NOT NULL DEFAULT 0,
-            last_error TEXT NOT NULL DEFAULT '',
+            old_content $lt, new_content $lt,
+            summary $sd, change_pct DOUBLE NOT NULL DEFAULT 0
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS subscriptions (
+            id $pk,
+            endpoint $endpoint NOT NULL UNIQUE,
+            p256dh $sd, auth $sd, label $sd,
+            created INTEGER NOT NULL, last_ok INTEGER, last_error $sd
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS queue (
+            id $pk,
+            created INTEGER NOT NULL, channels $sd,
+            title $sd, body $lt, url $sd, tag $sd
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS agents (
+            id $pk,
+            name $sd, token $tok NOT NULL UNIQUE,
+            created INTEGER NOT NULL, last_seen INTEGER, last_ip $sd,
+            info $sd, jobs_done INTEGER NOT NULL DEFAULT 0,
+            fails INTEGER NOT NULL DEFAULT 0, last_error $sd,
             priority INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS agent_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created INTEGER NOT NULL,
-            url TEXT NOT NULL,
-            headers TEXT NOT NULL DEFAULT '',
-            ua TEXT NOT NULL DEFAULT '',
-            browser INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'pending',
-            agent_id INTEGER,
-            claimed INTEGER,
-            http_status INTEGER NOT NULL DEFAULT 0,
-            body BLOB,
-            final_url TEXT NOT NULL DEFAULT '',
-            content_type TEXT NOT NULL DEFAULT '',
-            via TEXT NOT NULL DEFAULT '',
-            error TEXT NOT NULL DEFAULT '',
-            target_agent INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created INTEGER NOT NULL,
-            level TEXT NOT NULL,
-            message TEXT NOT NULL
-        );
-    ");
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS agent_requests (
+            id $pk,
+            created INTEGER NOT NULL, url $req, headers $lt,
+            ua $sd, browser INTEGER NOT NULL DEFAULT 0,
+            status VARCHAR(16) NOT NULL DEFAULT 'pending',
+            agent_id INTEGER, claimed INTEGER,
+            http_status INTEGER NOT NULL DEFAULT 0, body $blob,
+            final_url $sd, content_type $sd,
+            via $sd, error $sd, target_agent INTEGER
+        )$eng",
+        "CREATE TABLE IF NOT EXISTS log (
+            id $pk,
+            created INTEGER NOT NULL, level VARCHAR(16) NOT NULL, message $req
+        )$eng",
+    ];
+    foreach ($tables as $sql) {
+        $pdo->exec($sql);
+    }
+    $idx = $mysql
+        ? "CREATE INDEX idx_changes_watch ON changes (watch_id, created)"
+        : "CREATE INDEX IF NOT EXISTS idx_changes_watch ON changes(watch_id, created)";
+    try {
+        $pdo->exec($idx);
+    } catch (PDOException $e) {
+        // MySQL: indeksas jau yra – ignoruojam
+    }
 
     // Stulpeliai, pridėti vėlesnėse versijose (senos DB atnaujinamos automatiškai).
     add_columns($pdo, 'watches', [
-        'tags' => "TEXT NOT NULL DEFAULT ''",
-        'headers' => "TEXT NOT NULL DEFAULT ''",
-        'user_agent' => "TEXT NOT NULL DEFAULT 'mobile'",
+        'tags' => $sd,
+        'headers' => $lt,
+        'user_agent' => "VARCHAR(16) NOT NULL DEFAULT 'mobile'",
         'render_js' => 'INTEGER NOT NULL DEFAULT 0',
-        'value_history' => "TEXT NOT NULL DEFAULT ''",
-        'fetch_via' => "TEXT NOT NULL DEFAULT ''",
-        'check_from' => "TEXT NOT NULL DEFAULT 'server'",
+        'value_history' => $lt,
+        'fetch_via' => "VARCHAR(16) NOT NULL DEFAULT ''",
+        'check_from' => "VARCHAR(16) NOT NULL DEFAULT 'server'",
     ]);
 }
 
 function add_columns(PDO $pdo, string $table, array $cols): void
 {
     $have = [];
-    foreach ($pdo->query("PRAGMA table_info($table)") as $c) {
-        $have[$c['name']] = true;
+    if (ww_driver() === 'mysql') {
+        foreach ($pdo->query("SHOW COLUMNS FROM $table") as $c) {
+            $have[$c['Field']] = true;
+        }
+    } else {
+        foreach ($pdo->query("PRAGMA table_info($table)") as $c) {
+            $have[$c['name']] = true;
+        }
     }
     foreach ($cols as $name => $def) {
         if (!isset($have[$name])) {
@@ -183,18 +248,18 @@ function setting(string $key, ?string $default = null): ?string
 
 function set_setting(string $key, ?string $value): void
 {
-    $st = db()->prepare('INSERT INTO settings (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v');
-    $st->execute([$key, $value]);
+    db_upsert('settings', ['k'], ['k' => $key, 'v' => $value]);
     setting('__reload');
 }
 
 function ww_log(string $level, string $message): void
 {
     try {
-        db()->prepare('INSERT INTO log (created, level, message) VALUES (?, ?, ?)')
-            ->execute([time(), $level, mb_substr($message, 0, 2000)]);
-        // Laikome tik paskutinius 500 įrašų.
-        db()->exec('DELETE FROM log WHERE id <= (SELECT MAX(id) - 500 FROM log)');
+        db_write('INSERT INTO log (created, level, message) VALUES (?, ?, ?)', [time(), $level, mb_substr($message, 0, 2000)]);
+        // Laikome tik paskutinius 500 įrašų (retkarčiais, kad nekrautų DB).
+        if (random_int(1, 20) === 1) {
+            db_retry(fn() => db()->exec('DELETE FROM log WHERE id <= (SELECT MAX(id) - 500 FROM log)'));
+        }
     } catch (Throwable $e) {
         error_log('WebWatch log: ' . $e->getMessage());
     }

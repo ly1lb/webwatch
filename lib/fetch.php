@@ -141,7 +141,7 @@ function fetch_for_watch(array $w, bool $remember = true): array
         $first ??= $r;
         if ($r['ok']) {
             if ($remember && !empty($w['id']) && $remembered !== $via) {
-                db()->prepare('UPDATE watches SET fetch_via = ? WHERE id = ?')->execute([$via, $w['id']]);
+                db_write('UPDATE watches SET fetch_via = ? WHERE id = ?', [$via, $w['id']]);
             }
             return $r;
         }

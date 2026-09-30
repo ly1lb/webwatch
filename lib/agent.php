@@ -77,14 +77,13 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
 
         if ($r['node_failed']) {
             // Sutriko pats kompiuteris ar jo ryšys – perduodame kitam. Priežastį įsimename matomoje vietoje.
-            $db->prepare('UPDATE agents SET fails = fails + 1, last_error = ? WHERE id = ?')
-                ->execute([mb_substr($r['error'], 0, 300), $agent['id']]);
+            db_write('UPDATE agents SET fails = fails + 1, last_error = ? WHERE id = ?', [mb_substr($r['error'], 0, 300), $agent['id']]);
             ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – perduodama kitam');
             $lastFail = $r;
             continue;
         }
         // Sėkmingą darbą pažymime (išvalome seną klaidą)
-        db()->prepare("UPDATE agents SET last_error = '' WHERE id = ?")->execute([$agent['id']]);
+        db_write("UPDATE agents SET last_error = '' WHERE id = ?", [$agent['id']]);
         // Kompiuteris atsakė. Jei svetainė jį irgi užblokavo – gal kita vieta praeis
         if ($r['blocked']) {
             $lastBlocked = $r;
@@ -115,8 +114,8 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
 {
     $res = ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'error' => '', 'blocked' => false, 'node_failed' => false];
 
-    $db->prepare('INSERT INTO agent_requests (created, url, headers, ua, browser, target_agent) VALUES (?, ?, ?, ?, ?, ?)')
-        ->execute([time(), $url, implode("\n", $headers), WW_UA[$ua] ?? WW_UA['desktop'], $render ? 1 : 0, $agentId]);
+    db_write('INSERT INTO agent_requests (created, url, headers, ua, browser, target_agent) VALUES (?, ?, ?, ?, ?, ?)',
+        [time(), $url, implode("\n", $headers), WW_UA[$ua] ?? WW_UA['desktop'], $render ? 1 : 0, $agentId]);
     $id = (int)$db->lastInsertId();
     @set_time_limit(WW_AGENT_RESULT_TIMEOUT + 30);
 
@@ -134,7 +133,7 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
             $full = $db->prepare('SELECT * FROM agent_requests WHERE id = ?');
             $full->execute([$id]);
             $r = $full->fetch();
-            $db->prepare('DELETE FROM agent_requests WHERE id = ?')->execute([$id]);
+            db_write('DELETE FROM agent_requests WHERE id = ?', [$id]);
             return agent_interpret($r, $url);
         }
         if ($status !== 'claimed' && !$claimed && $waited > WW_AGENT_CLAIM_TIMEOUT) {
@@ -156,7 +155,7 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
             break;
         }
     }
-    $db->prepare('DELETE FROM agent_requests WHERE id = ?')->execute([$id]);
+    db_write('DELETE FROM agent_requests WHERE id = ?', [$id]);
     return $res;
 }
 

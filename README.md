@@ -29,11 +29,12 @@ Savas svetainių pokyčių stebėjimo įrankis (kaip „Web Alert“ Android'e),
 - Pokyčių istorija su spalvotu skirtumų (diff) rodymu.
 - Įspėja, jei puslapio nepavyksta patikrinti 3 kartus iš eilės.
 - Veikia kaip programėlė (PWA) – tamsus režimas, pritaikyta telefonui.
-- Jokių išorinių bibliotekų, jokios MySQL – duomenys SQLite faile.
+- Duomenys SQLite faile (nieko konfigūruoti nereikia) **arba** MySQL / MariaDB, jei norite (žr. „Duomenų bazė“).
 
 ## Reikalavimai
 
 - PHP **8.1+** su `curl`, `openssl`, `pdo_sqlite`, `dom`, `mbstring` (Hostinger turi viską).
+  MySQL naudojimui – dar `pdo_mysql` (Hostinger irgi turi).
 - **HTTPS** (Hostinger suteikia nemokamą SSL) – be jo push neveiks.
 - Cron užduotys (Hostinger: hPanel → Advanced → Cron Jobs).
 
@@ -154,9 +155,24 @@ data/            – SQLite duomenų bazė ir sesijos (uždrausta prieiga iš in
 config.sample.php – nebūtini nustatymai (pervadinkite į config.php)
 ```
 
+## Duomenų bazė (SQLite arba MySQL)
+
+Numatytai naudojama **SQLite** – nieko daryti nereikia, viskas veikia iš karto.
+
+Jei įdarbinate **namų kompiuterius** ir stebite daug puslapių, gali pasitaikyti „database is locked“
+(SQLite prastai tvarkosi, kai vienu metu rašo daug procesų). Tokiu atveju pereikite prie **MySQL / MariaDB**:
+
+1. Hostinger hPanel → **Databases → MySQL Databases** → sukurkite duombazę ir vartotoją.
+2. Pervadinkite `config.sample.php` į `config.php` ir įrašykite `WW_DB_HOST/NAME/USER/PASS` (pavyzdys faile).
+3. Atidarykite WebWatch – lentelės sukuriamos automatiškai.
+4. Senus stebėjimus perkelkite per **Nustatymai → Atsarginė kopija** (eksportas iš SQLite, importas į MySQL).
+
+Nuo šios versijos ir su SQLite užraktų problema gerokai sumažinta (WAL, ilgesnis laukimas, automatinis
+pakartojimas), tad daugeliu atvejų SQLite pakanka.
+
 ## Atsarginė kopija ir atnaujinimas
 
-- Visi duomenys yra `data/webwatch.sqlite` – nusikopijuokite šį failą.
+- SQLite atveju visi duomenys yra `data/webwatch.sqlite` – nusikopijuokite šį failą (MySQL – per hPanel).
 - Atnaujinant – perrašykite visus failus **išskyrus** `data/` katalogą ir `config.php`.
 - Pamiršote slaptažodį? File Manager'yje kataloge `data/` sukurkite tuščią failą `reset-password`
   ir atidarykite WebWatch – bus pasiūlyta sukurti naują slaptažodį (stebėjimai išliks).

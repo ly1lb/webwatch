@@ -53,10 +53,10 @@ if ($action === 'script') {
 }
 
 $db = db();
-$touch = function () use ($db, $agent) {
+$touch = function () use ($agent) {
     $info = mb_substr(trim((string)($_GET['os'] ?? '') . ' ' . (string)($_GET['v'] ?? '') . ' ' . (string)($_GET['browser'] ?? '')), 0, 120);
-    $db->prepare('UPDATE agents SET last_seen = ?, last_ip = ?, info = ? WHERE id = ?')
-        ->execute([time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $info, $agent['id']]);
+    db_write('UPDATE agents SET last_seen = ?, last_ip = ?, info = ? WHERE id = ?',
+        [time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $info, $agent['id']]);
 };
 
 if ($action === 'poll') {
@@ -73,9 +73,12 @@ if ($action === 'poll') {
         $row = $find->fetch();
         $find->closeCursor();
         if ($row) {
-            $claim = $db->prepare("UPDATE agent_requests SET status = 'claimed', agent_id = ?, claimed = ? WHERE id = ? AND status = 'pending'");
-            $claim->execute([$agent['id'], time(), $row['id']]);
-            if ($claim->rowCount() === 1) {
+            $claimed = db_retry(function () use ($db, $agent, $row) {
+                $claim = $db->prepare("UPDATE agent_requests SET status = 'claimed', agent_id = ?, claimed = ? WHERE id = ? AND status = 'pending'");
+                $claim->execute([$agent['id'], time(), $row['id']]);
+                return $claim->rowCount() === 1;
+            });
+            if ($claimed) {
                 $st = $db->prepare('SELECT id, url, headers, ua, browser FROM agent_requests WHERE id = ?');
                 $st->execute([$row['id']]);
                 $job = $st->fetch();
@@ -122,17 +125,19 @@ if ($action === 'result') {
     if (strlen($body) > 8 * 1024 * 1024) {
         $body = substr($body, 0, 8 * 1024 * 1024);
     }
-    $up = $db->prepare("UPDATE agent_requests SET status = 'done', http_status = :status, body = :body, final_url = :final,
-        content_type = :ctype, via = :via, error = :error WHERE id = :id");
-    $up->bindValue(':status', (int)($_SERVER['HTTP_X_STATUS'] ?? 0), PDO::PARAM_INT);
-    $up->bindValue(':body', $body, PDO::PARAM_LOB);
-    $up->bindValue(':final', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_FINAL_URL'] ?? '')), 0, 2000));
-    $up->bindValue(':ctype', mb_substr((string)($_SERVER['HTTP_X_CONTENT_TYPE'] ?? ''), 0, 200));
-    $up->bindValue(':via', mb_substr((string)($_SERVER['HTTP_X_VIA'] ?? ''), 0, 20));
-    $up->bindValue(':error', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_ERROR'] ?? '')), 0, 500));
-    $up->bindValue(':id', $id, PDO::PARAM_INT);
-    $up->execute();
-    $db->prepare('UPDATE agents SET jobs_done = jobs_done + 1, last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);
+    db_retry(function () use ($db, $body, $id) {
+        $up = $db->prepare("UPDATE agent_requests SET status = 'done', http_status = :status, body = :body, final_url = :final,
+            content_type = :ctype, via = :via, error = :error WHERE id = :id");
+        $up->bindValue(':status', (int)($_SERVER['HTTP_X_STATUS'] ?? 0), PDO::PARAM_INT);
+        $up->bindValue(':body', $body, PDO::PARAM_LOB);
+        $up->bindValue(':final', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_FINAL_URL'] ?? '')), 0, 2000));
+        $up->bindValue(':ctype', mb_substr((string)($_SERVER['HTTP_X_CONTENT_TYPE'] ?? ''), 0, 200));
+        $up->bindValue(':via', mb_substr((string)($_SERVER['HTTP_X_VIA'] ?? ''), 0, 20));
+        $up->bindValue(':error', mb_substr(rawurldecode((string)($_SERVER['HTTP_X_ERROR'] ?? '')), 0, 500));
+        $up->bindValue(':id', $id, PDO::PARAM_INT);
+        $up->execute();
+    });
+    db_write('UPDATE agents SET jobs_done = jobs_done + 1, last_seen = ? WHERE id = ?', [time(), $agent['id']]);
     agent_out(['ok' => true]);
 }
 

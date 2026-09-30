@@ -40,9 +40,8 @@ try {
                 out(['ok' => false, 'error' => 'Neteisinga prenumerata']);
             }
             $label = mb_substr(trim((string)($input['label'] ?? '')), 0, 80) ?: 'Įrenginys';
-            db()->prepare('INSERT INTO subscriptions (endpoint, p256dh, auth, label, created) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label')
-                ->execute([$endpoint, $p256, $auth, $label, time()]);
+            db_upsert('subscriptions', ['endpoint'],
+                ['endpoint' => $endpoint, 'p256dh' => $p256, 'auth' => $auth, 'label' => $label, 'created' => time()]);
             out(['ok' => true]);
 
         case 'unsubscribe':

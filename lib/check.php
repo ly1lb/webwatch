@@ -133,13 +133,14 @@ function run_check(array $w, bool $sendNotify = true): array
     if ($changed) {
         $fields .= ', last_change = ?, unseen = unseen + 1';
         $params[] = $now;
-        $db->prepare('INSERT INTO changes (watch_id, created, old_content, new_content, summary, change_pct) VALUES (?, ?, ?, ?, ?, ?)')
-            ->execute([$w['id'], $now, $old, $new, $summary, $pct]);
-        $db->prepare('DELETE FROM changes WHERE watch_id = ? AND id NOT IN (SELECT id FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES . ')')
-            ->execute([$w['id'], $w['id']]);
+        db_write('INSERT INTO changes (watch_id, created, old_content, new_content, summary, change_pct) VALUES (?, ?, ?, ?, ?, ?)',
+            [$w['id'], $now, $old, $new, $summary, $pct]);
+        // Įterptas SELECT su papildomu lygmeniu – kad veiktų ir MySQL (jis neleidžia LIMIT tiesiai IN viduje)
+        db_write('DELETE FROM changes WHERE watch_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES . ') keep)',
+            [$w['id'], $w['id']]);
     }
     $params[] = $w['id'];
-    $db->prepare("UPDATE watches SET $fields WHERE id = ?")->execute($params);
+    db_write("UPDATE watches SET $fields WHERE id = ?", $params);
 
     $sent = null;
     if ($sendNotify && (int)$w['fail_count'] >= WW_FAILS_BEFORE_ALERT && !$changed) {
@@ -169,8 +170,8 @@ function run_check(array $w, bool $sendNotify = true): array
 function record_failure(array $w, string $error, bool $sendNotify): array
 {
     $fails = (int)$w['fail_count'] + 1;
-    db()->prepare("UPDATE watches SET last_check = ?, last_status = 'error', last_error = ?, fail_count = ? WHERE id = ?")
-        ->execute([time(), $error, $fails, $w['id']]);
+    db_write("UPDATE watches SET last_check = ?, last_status = 'error', last_error = ?, fail_count = ? WHERE id = ?",
+        [time(), $error, $fails, $w['id']]);
     if ($sendNotify && $fails === WW_FAILS_BEFORE_ALERT) {
         notify_user(
             (string)$w['notify'],

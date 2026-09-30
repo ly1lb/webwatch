@@ -264,7 +264,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($do === 'delete_watch') {
-        db()->prepare('DELETE FROM watches WHERE id = ?')->execute([(int)($_POST['id'] ?? 0)]);
+        $wid = (int)($_POST['id'] ?? 0);
+        db_write('DELETE FROM changes WHERE watch_id = ?', [$wid]);
+        db_write('DELETE FROM watches WHERE id = ?', [$wid]);
         flash('Ištrinta');
         redirect('./');
     }

@@ -63,8 +63,8 @@ function notify_user(string $notify, string $title, string $body, string $link, 
         return $result;
     }
     if ($allowDefer && is_quiet_now()) {
-        db()->prepare('INSERT INTO queue (created, channels, title, body, url, tag) VALUES (?, ?, ?, ?, ?, ?)')
-            ->execute([time(), implode(',', $channels), $title, $body, $link, $tag]);
+        db_write('INSERT INTO queue (created, channels, title, body, url, tag) VALUES (?, ?, ?, ?, ?, ?)',
+            [time(), implode(',', $channels), $title, $body, $link, $tag]);
         $result['deferred'] = true;
         return $result;
     }
