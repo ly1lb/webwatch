@@ -299,3 +299,8 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .switch-row{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 .switch-row input{margin-top:3px;flex:0 0 auto}
 .ag-rotate small{display:block;margin-top:6px}
+
+/* Agento versijos ženkliukas */
+.ag-ver{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:999px;font-size:.72rem;font-weight:600;vertical-align:middle}
+.ag-ver.ok{background:rgba(40,170,90,.15);color:#1f9d55}
+.ag-ver.old{background:rgba(220,70,70,.15);color:#d33}

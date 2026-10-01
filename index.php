@@ -1147,20 +1147,28 @@ function view_settings(?array $flash): void
         <?php
         $agents = agents_all();
         $newId = (int)($_GET['agent'] ?? 0);
+        $shipV = agent_shipped_version();
         ?>
+        <?php if ($shipV > 0 && $shipV < 5): ?>
+            <p class="err-text">⚠️ Serveryje dar <b>sena agento versija (v<?= $shipV ?>)</b> – mygtukas „Įdiegti" įdiegs seną agentą be ekrano nuotraukų. Pirmiausia į Hostingerį įkelkite naujus failus (ypač <code>agent/</code> aplanką), tada diekite iš naujo.</p>
+        <?php endif; ?>
         <?php if ($agents): ?>
             <ul class="agents">
-                <?php foreach ($agents as $i => $a): $on = agent_is_online($a); ?>
+                <?php foreach ($agents as $i => $a): $on = agent_is_online($a); $av = agent_version($a); ?>
                     <li>
                         <span class="ag-order"><?= $i + 1 ?>.</span>
                         <span class="dot <?= $on ? 'ok' : 'paused' ?>" title="<?= $on ? 'Prisijungęs' : 'Neprisijungęs' ?>"></span>
                         <div class="ag-info">
                             <b><?= h($a['name']) ?></b>
+                            <?php if ($on && $av > 0): ?>
+                                <span class="ag-ver <?= $av >= 5 ? 'ok' : 'old' ?>" title="Veikianti agento versija">v<?= $av ?><?= $av >= 5 ? ' ✓' : ' – sena' ?></span>
+                            <?php endif; ?>
                             <small class="muted">
                                 <?= $on ? 'prisijungęs' : ($a['last_seen'] ? 'matytas ' . h(human_time((int)$a['last_seen'])) : 'dar neprisijungė') ?>
                                 · atlikta <?= (int)$a['jobs_done'] ?>
                                 <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
                             </small>
+                            <?php if ($on && $av > 0 && $av < 5): ?><small class="err-text">⚠️ Sena versija – ekrano nuotraukos neveiks. Spauskite „Įdiegti" ir paleiskite komandą iš naujo. Jei nepasikeičia – uždarykite seną agento langą arba sustabdykite seną procesą.</small><?php endif; ?>
                             <?php if ($a['last_error']): ?><small class="err-text">⚠️ <?= h($a['last_error']) ?></small><?php endif; ?>
                         </div>
                         <span class="ag-btns">

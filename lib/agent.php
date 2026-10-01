@@ -32,6 +32,23 @@ function agent_is_online(array $a): bool
     return (int)$a['last_seen'] >= time() - WW_AGENT_ONLINE_SECONDS;
 }
 
+/**
+ * Kokią agento versiją serveris įdiegs (iš agent/agent.py failo). Jei čia < 5,
+ * vadinasi į serverį dar neįkelti nauji agento failai – „Įdiegti" duos seną agentą.
+ */
+function agent_shipped_version(): int
+{
+    static $v = null;
+    if ($v === null) {
+        $v = 0;
+        $txt = @file_get_contents(WW_ROOT . '/agent/agent.py');
+        if ($txt !== false && preg_match('/^VERSION\s*=\s*"(\d+)"/m', $txt, $m)) {
+            $v = (int)$m[1];
+        }
+    }
+    return $v;
+}
+
 function agents_online(): array
 {
     return array_values(array_filter(agents_all(), 'agent_is_online'));
