@@ -158,6 +158,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'user_agent' => ($_POST['user_agent'] ?? '') === 'desktop' ? 'desktop' : 'mobile',
             'render_js' => !empty($_POST['render_js']) ? 1 : 0,
             'check_from' => in_array($_POST['check_from'] ?? '', ['server', 'auto', 'agent'], true) ? $_POST['check_from'] : 'server',
+            'folder' => mb_substr(trim((string)($_POST['folder'] ?? '')), 0, 64),
+            'sched_days' => implode(',', array_values(array_intersect(['1', '2', '3', '4', '5', '6', '7'], (array)($_POST['sched_days'] ?? [])))),
+            'sched_from' => preg_match('/^\d{1,2}:\d{2}$/', (string)($_POST['sched_from'] ?? '')) ? $_POST['sched_from'] : '',
+            'sched_to' => preg_match('/^\d{1,2}:\d{2}$/', (string)($_POST['sched_to'] ?? '')) ? $_POST['sched_to'] : '',
+            'extract_regex' => trim((string)($_POST['extract_regex'] ?? '')),
+            'require_regex' => trim((string)($_POST['require_regex'] ?? '')),
+            'keyword_all' => !empty($_POST['keyword_all']) ? 1 : 0,
         ];
         if ($data['name'] === '') {
             $data['name'] = mb_substr(trim((string)($_POST['auto_name'] ?? '')), 0, 120);
@@ -176,7 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 redirect('./');
             }
             $cols = implode(', ', array_map(fn($k) => "$k = :$k", array_keys($data)));
-            $resetKeys = ['url', 'selector', 'compare_mode', 'keyword', 'ignore_numbers', 'ignore_regex', 'headers', 'user_agent', 'render_js'];
+            $resetKeys = ['url', 'selector', 'compare_mode', 'keyword', 'ignore_numbers', 'ignore_regex', 'headers', 'user_agent', 'render_js', 'extract_regex', 'keyword_all'];
             $reset = false;
             foreach ($resetKeys as $k) {
                 if ((string)$old[$k] !== (string)$data[$k]) {
@@ -242,7 +249,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('?view=settings#backup');
         }
         $allowed = ['name', 'url', 'selector', 'compare_mode', 'keyword', 'number_dir', 'threshold', 'ignore_numbers',
-            'ignore_regex', 'interval_min', 'notify', 'active', 'tags', 'headers', 'user_agent', 'render_js', 'check_from'];
+            'ignore_regex', 'interval_min', 'notify', 'active', 'tags', 'headers', 'user_agent', 'render_js', 'check_from',
+            'folder', 'sched_days', 'sched_from', 'sched_to', 'extract_regex', 'require_regex', 'keyword_all'];
         $n = 0;
         foreach ($list as $item) {
             if (!is_array($item) || !preg_match('~^https?://~i', (string)($item['url'] ?? ''))) {
@@ -376,7 +384,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 switch ($view) {
     case 'export':
         $rows = db()->query('SELECT name, url, selector, compare_mode, keyword, number_dir, threshold, ignore_numbers, ignore_regex,
-            interval_min, notify, active, tags, headers, user_agent, render_js, check_from FROM watches ORDER BY id')->fetchAll();
+            interval_min, notify, active, tags, headers, user_agent, render_js, check_from, folder, sched_days, sched_from, sched_to, extract_regex, require_regex, keyword_all FROM watches ORDER BY id')->fetchAll();
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="webwatch-' . date('Y-m-d') . '.json"');
         echo json_encode(['app' => 'WebWatch', 'version' => WW_VERSION, 'exported' => date('c'), 'watches' => $rows],
@@ -484,7 +492,7 @@ function cron_warning(): string
 
 function view_list(?array $flash): void
 {
-    $watches = db()->query('SELECT * FROM watches ORDER BY unseen DESC, active DESC, COALESCE(last_change, created) DESC')->fetchAll();
+    $watches = db()->query('SELECT * FROM watches ORDER BY folder, unseen DESC, active DESC, COALESCE(last_change, created) DESC')->fetchAll();
     $subs = (int)db()->query('SELECT COUNT(*) FROM subscriptions')->fetchColumn();
     page_start('Stebimi puslapiai', true, 'list');
     render_flash($flash);
@@ -532,10 +540,19 @@ function view_list(?array $flash): void
             <?php endif; ?>
         <?php endif; ?>
         <div class="watch-list">
-        <?php foreach ($watches as $w): ?>
-            <?php $isNew = (int)$w['unseen'] > 0; ?>
+        <?php $curFolder = null; foreach ($watches as $w): ?>
+            <?php
+            $isNew = (int)$w['unseen'] > 0;
+            $folder = (string)$w['folder'];
+            if ($folder !== $curFolder) {
+                $curFolder = $folder;
+                if ($folder !== '') {
+                    echo '<div class="folder-head" data-folder="' . h(mb_strtolower($folder)) . '">📁 ' . h($folder) . '</div>';
+                }
+            }
+            ?>
             <a class="watch-card <?= $w['active'] ? '' : 'paused' ?> <?= $isNew ? 'is-new' : '' ?>" href="?view=watch&id=<?= $w['id'] ?>" data-watch-id="<?= $w['id'] ?>" data-active="<?= (int)$w['active'] ?>"
-               data-search="<?= h(mb_strtolower(watch_title($w) . ' ' . $w['url'] . ' ' . $w['tags'])) ?>" data-tags="<?= h(mb_strtolower(implode('|', tag_list((string)$w['tags'])))) ?>">
+               data-search="<?= h(mb_strtolower(watch_title($w) . ' ' . $w['url'] . ' ' . $w['tags'] . ' ' . $folder)) ?>" data-tags="<?= h(mb_strtolower(implode('|', tag_list((string)$w['tags'])))) ?>">
                 <?= status_dot($w) ?>
                 <div class="wc-body">
                     <div class="wc-top">
@@ -579,9 +596,13 @@ function view_edit(?array $flash): void
         'keyword' => '', 'number_dir' => 'any', 'threshold' => 0, 'ignore_numbers' => 0, 'ignore_regex' => '',
         'interval_min' => 60, 'notify' => 'push,fallback', 'active' => 1, 'tags' => '', 'headers' => '',
         'user_agent' => 'mobile', 'render_js' => 0, 'check_from' => agents_all() ? 'auto' : 'server',
+        'folder' => (string)($_GET['folder'] ?? ''), 'sched_days' => '', 'sched_from' => '', 'sched_to' => '',
+        'extract_regex' => '', 'require_regex' => '', 'keyword_all' => 0,
     ];
     $channels = parse_channels((string)$w['notify']);
     $hasAgents = count(agents_all()) > 0;
+    $schedDays = array_filter(array_map('trim', explode(',', (string)$w['sched_days'])));
+    $allFolders = array_values(array_filter(array_unique(array_map(fn($r) => (string)$r['folder'], db()->query("SELECT DISTINCT folder FROM watches WHERE folder <> ''")->fetchAll()))));
     page_start($id ? 'Redaguoti' : 'Naujas stebėjimas', true, 'edit');
     render_flash($flash);
     $scope = $w['selector'] !== '' ? 'element' : 'page';
@@ -634,6 +655,7 @@ function view_edit(?array $flash): void
                 <label><span data-show-mode="keyword_appear keyword_disappear">Žodis ar frazė</span><span data-show-mode="added">Filtras: tik naujos eilutės su žodžiu <span class="muted">(nebūtina)</span></span> <span class="muted">– kelis atskirkite |</span>
                     <input type="text" name="keyword" id="f-keyword" value="<?= h($w['keyword']) ?>" placeholder="pvz. Yra sandėlyje | In stock">
                 </label>
+                <label class="check" data-show-mode="keyword_appear keyword_disappear"><input type="checkbox" name="keyword_all" value="1" <?= !empty($w['keyword_all']) ? 'checked' : '' ?>> Reikia <b>visų</b> žodžių (IR), o ne bet kurio</label>
             </div>
             <div data-show-mode="number">
                 <label>Kryptis
@@ -673,11 +695,34 @@ function view_edit(?array $flash): void
                 <p class="hint">Nieko nepažymėjus – pokyčiai tik išsaugomi istorijoje.</p>
             </fieldset>
             <label class="check"><input type="checkbox" name="active" value="1" <?= $w['active'] ? 'checked' : '' ?>> Aktyvus</label>
+            <label>Aplankas <span class="muted">(nebūtina – grupavimui sąraše)</span>
+                <input type="text" name="folder" value="<?= h($w['folder']) ?>" list="folders" placeholder="pvz. Darbas, Pirkiniai" maxlength="64" autocapitalize="off">
+                <datalist id="folders"><?php foreach ($allFolders as $f): ?><option value="<?= h($f) ?>"></option><?php endforeach; ?></datalist>
+            </label>
+            <details>
+                <summary>⏰ Tvarkaraštis (tikrinti tik tam tikru laiku)</summary>
+                <p class="hint">Palikite tuščia – tikrinama visada. Galite riboti pagal savaitės dienas ir valandas.</p>
+                <div class="weekdays">
+                    <?php foreach (['1' => 'Pr', '2' => 'An', '3' => 'Tr', '4' => 'Kt', '5' => 'Pn', '6' => 'Št', '7' => 'Sk'] as $d => $lbl): ?>
+                        <label class="wd"><input type="checkbox" name="sched_days[]" value="<?= $d ?>" <?= in_array($d, $schedDays, true) ? 'checked' : '' ?>><span><?= $lbl ?></span></label>
+                    <?php endforeach; ?>
+                </div>
+                <div class="row2">
+                    <label>Nuo<input type="time" name="sched_from" value="<?= h($w['sched_from']) ?>"></label>
+                    <label>Iki<input type="time" name="sched_to" value="<?= h($w['sched_to']) ?>"></label>
+                </div>
+            </details>
             <details>
                 <summary>Papildomi nustatymai</summary>
                 <label class="check"><input type="checkbox" name="ignore_numbers" id="f-ignore-numbers" value="1" <?= $w['ignore_numbers'] ? 'checked' : '' ?>> Ignoruoti skaičių pokyčius (datos, laikai, skaitliukai)</label>
                 <label>Ignoruoti tekstą (reguliarios išraiškos, po vieną eilutėje)
                     <textarea name="ignore_regex" id="f-ignore-regex" rows="3" placeholder="pvz. Atnaujinta:.*&#10;\d+ komentar\w+" autocapitalize="off" spellcheck="false"><?= h($w['ignore_regex']) ?></textarea>
+                </label>
+                <label>Ištraukti reikšmę (reguliari išraiška) <span class="muted">(nebūtina)</span>
+                    <input type="text" name="extract_regex" value="<?= h($w['extract_regex']) ?>" placeholder="pvz. (\d+[.,]\d+)\s*€ – lyginama tik rasta reikšmė" autocapitalize="off" spellcheck="false">
+                </label>
+                <label>Pranešti tik jei naujas turinys atitinka <span class="muted">(žodis arba reguliari išraiška, nebūtina)</span>
+                    <input type="text" name="require_regex" value="<?= h($w['require_regex']) ?>" placeholder="pvz. sandėlyje|in stock" autocapitalize="off" spellcheck="false">
                 </label>
                 <label>Naršyklės tipas
                     <select name="user_agent" id="f-ua">
@@ -799,6 +844,44 @@ function view_watch(?array $flash): void
             <button class="btn danger">🗑 Ištrinti</button>
         </form>
     </div>
+
+    <?php
+    // Statistika
+    $stTimes = db()->prepare('SELECT created FROM changes WHERE watch_id = ? ORDER BY created');
+    $stTimes->execute([$id]);
+    $times = array_map('intval', array_column($stTimes->fetchAll(), 'created'));
+    if ($times):
+        $now = time();
+        $tot = count($times);
+        $d30 = count(array_filter($times, fn($t) => $t > $now - 30 * 86400));
+        $d7 = count(array_filter($times, fn($t) => $t > $now - 7 * 86400));
+        $avg = '';
+        if ($tot >= 2) {
+            $avg = human_duration((int)(($times[$tot - 1] - $times[0]) / ($tot - 1)));
+        }
+        // Savaitinė histograma (12 sav.)
+        $weeks = array_fill(0, 12, 0);
+        foreach ($times as $t) {
+            $wi = 11 - (int)floor(($now - $t) / (7 * 86400));
+            if ($wi >= 0 && $wi < 12) {
+                $weeks[$wi]++;
+            }
+        }
+        $max = max($weeks) ?: 1;
+    ?>
+    <div class="card">
+        <div class="wstats">
+            <span>Iš viso pokyčių: <b><?= $tot ?></b></span>
+            <span>Per 30 d.: <b><?= $d30 ?></b></span>
+            <span>Per 7 d.: <b><?= $d7 ?></b></span>
+            <?php if ($avg): ?><span>Vidutiniškai kas <b><?= h($avg) ?></b></span><?php endif; ?>
+        </div>
+        <div class="spark" title="Pokyčiai per paskutines 12 savaičių">
+            <?php foreach ($weeks as $cnt): ?><i style="height:<?= (int)round($cnt / $max * 100) ?>%" title="<?= $cnt ?>"></i><?php endforeach; ?>
+        </div>
+        <div class="wstats"><span class="muted">← prieš 12 sav.</span><span class="muted" style="margin-left:auto">ši sav. →</span></div>
+    </div>
+    <?php endif; ?>
 
     <h2>Pokyčių istorija</h2>
     <?php if (!$changes): ?>

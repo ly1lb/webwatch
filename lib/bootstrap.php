@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.4.0');
+define('WW_VERSION', '1.5.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -212,6 +212,19 @@ function migrate(PDO $pdo): void
         'value_history' => $lt,
         'fetch_via' => "VARCHAR(16) NOT NULL DEFAULT ''",
         'check_from' => "VARCHAR(16) NOT NULL DEFAULT 'server'",
+        // Tvarkaraštis
+        'sched_days' => "VARCHAR(16) NOT NULL DEFAULT ''",   // pvz. "1,2,3,4,5"; tuščia = visada
+        'sched_from' => "VARCHAR(5) NOT NULL DEFAULT ''",    // HH:MM
+        'sched_to' => "VARCHAR(5) NOT NULL DEFAULT ''",
+        // Aplankai
+        'folder' => "VARCHAR(64) NOT NULL DEFAULT ''",
+        // Sudėtingesnės sąlygos
+        'extract_regex' => $sd,                              // ištraukti reikšmę (1-a grupė) prieš lyginant
+        'require_regex' => $sd,                              // pranešti tik jei naujas turinys atitinka
+        'keyword_all' => 'INTEGER NOT NULL DEFAULT 0',       // raktažodžiai: 1 = visi (IR), 0 = bet kuris (ARBA)
+    ]);
+    add_columns($pdo, 'changes', [
+        'has_shot' => 'INTEGER NOT NULL DEFAULT 0',          // ar yra ekrano nuotraukos
     ]);
 }
 
@@ -309,6 +322,21 @@ function remember_app_url(): void
     if (setting('app_url') !== $url) {
         set_setting('app_url', $url);
     }
+}
+
+/** Trukmė žmogui: 90000 -> „1 d.“, 3600 -> „1 val.“ */
+function human_duration(int $sec): string
+{
+    if ($sec < 90) {
+        return $sec . ' sek.';
+    }
+    if ($sec < 5400) {
+        return max(1, (int)round($sec / 60)) . ' min.';
+    }
+    if ($sec < 129600) {
+        return max(1, (int)round($sec / 3600)) . ' val.';
+    }
+    return max(1, (int)round($sec / 86400)) . ' d.';
 }
 
 function human_time(?int $ts): string

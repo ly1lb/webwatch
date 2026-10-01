@@ -271,3 +271,18 @@ input.search { margin: 0 0 10px; background: var(--card); }
   .topbar nav a:not(.btn) { padding: 6px 5px; font-size: .85rem; }
   .brand { font-size: .95rem; }
 }
+
+/* Tvarkaraščio savaitės dienos */
+.weekdays { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 12px; }
+.wd { margin: 0 !important; }
+.wd input { position: absolute; opacity: 0; pointer-events: none; }
+.wd span { display: block; min-width: 38px; text-align: center; padding: 8px 6px; border: 1px solid var(--line); border-radius: 9px; font-weight: 600; font-size: .9rem; color: var(--muted); cursor: pointer; }
+.wd input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Aplankų antraštės sąraše */
+.folder-head { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-weight: 700; color: var(--muted); font-size: .9rem; text-transform: uppercase; letter-spacing: .03em; }
+.folder-head::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+/* Statistika */
+.wstats { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: .85rem; color: var(--muted); margin: 4px 0 10px; }
+.wstats b { color: var(--text); }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 34px; margin: 6px 0; }
+.spark i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; opacity: .7; }

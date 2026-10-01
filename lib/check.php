@@ -22,15 +22,37 @@ function keyword_list(string $keywords): array
     return array_values(array_filter(array_map('trim', preg_split('/\R|\|/', $keywords)), fn($k) => $k !== ''));
 }
 
-function keyword_found(string $text, string $keywords): bool
+function keyword_found(string $text, string $keywords, bool $all = false): bool
 {
-    foreach (keyword_list($keywords) as $k) {
-        $k = trim($k);
-        if ($k !== '' && mb_stripos($text, $k) !== false) {
-            return true;
+    $list = keyword_list($keywords);
+    if (!$list) {
+        return false;
+    }
+    foreach ($list as $k) {
+        $hit = mb_stripos($text, $k) !== false;
+        if ($all && !$hit) {
+            return false;   // IR: turi būti visi
+        }
+        if (!$all && $hit) {
+            return true;    // ARBA: pakanka vieno
         }
     }
-    return false;
+    return $all;            // IR: visi rasti
+}
+
+/** Pritaiko „ištraukimo“ reguliarią išraišką: palieka tik atitikmenis (1-ą grupę). */
+function apply_extract(string $text, string $regex): string
+{
+    $regex = trim($regex);
+    if ($regex === '') {
+        return $text;
+    }
+    $pattern = '~' . str_replace('~', '\~', $regex) . '~u';
+    if (@preg_match_all($pattern, $text, $m) && !empty($m[0])) {
+        $out = !empty($m[1]) && count(array_filter($m[1], fn($x) => $x !== '')) ? $m[1] : $m[0];
+        return implode("\n", $out);
+    }
+    return ''; // nieko nerado – tuščia (bus matoma kaip „nerasta“)
 }
 
 /**
@@ -49,10 +71,15 @@ function run_check(array $w, bool $sendNotify = true): array
     }
 
     $new = mb_substr($ex['content'], 0, WW_MAX_CONTENT);
+    // Ištraukimo reguliari išraiška (pvz. iš teksto palikti tik kainą)
+    if (trim((string)($w['extract_regex'] ?? '')) !== '') {
+        $new = apply_extract($new, (string)$w['extract_regex']);
+    }
     $old = $w['last_content'];
     $first = $old === null;
     $mode = (string)$w['compare_mode'];
     $threshold = (float)$w['threshold'];
+    $kwAll = !empty($w['keyword_all']);
 
     $changed = false;
     $updateBaseline = true;
@@ -62,8 +89,8 @@ function run_check(array $w, bool $sendNotify = true): array
     switch ($mode) {
         case 'keyword_appear':
         case 'keyword_disappear':
-            $present = keyword_found(comparable_text($new, $w), (string)$w['keyword']);
-            $prev = $first ? null : keyword_found(comparable_text((string)$old, $w), (string)$w['keyword']);
+            $present = keyword_found(comparable_text($new, $w), (string)$w['keyword'], $kwAll);
+            $prev = $first ? null : keyword_found(comparable_text((string)$old, $w), (string)$w['keyword'], $kwAll);
             if ($mode === 'keyword_appear' && $present && $prev !== true) {
                 $changed = true;
                 $summary = 'Atsirado: „' . trim((string)$w['keyword']) . '“';
@@ -117,6 +144,20 @@ function run_check(array $w, bool $sendNotify = true): array
                     $updateBaseline = false;
                 }
             }
+    }
+
+    // Papildoma sąlyga: pranešti tik jei naujas turinys atitinka nurodytą išraišką/žodžius.
+    if ($changed && trim((string)($w['require_regex'] ?? '')) !== '') {
+        $req = trim((string)$w['require_regex']);
+        $pat = '~' . str_replace('~', '\~', $req) . '~ui';
+        $matches = @preg_match($pat, $new);
+        if ($matches === false) { // ne regex – tada kaip žodis/frazė
+            $matches = mb_stripos($new, $req) !== false ? 1 : 0;
+        }
+        if (!$matches) {
+            $changed = false;      // pokytis yra, bet neatitinka sąlygos – tyliai atnaujinam
+            $updateBaseline = true;
+        }
     }
 
     $db = db();
@@ -190,7 +231,33 @@ function due_watches(): array
     $st = db()->prepare('SELECT * FROM watches WHERE active = 1 AND (last_check IS NULL OR last_check + interval_min * 60 - 30 <= ?) ORDER BY last_check IS NOT NULL, last_check');
     $st->bindValue(1, time(), PDO::PARAM_INT); // kitaip SQLite lygina kaip tekstą
     $st->execute();
-    return $st->fetchAll();
+    return array_values(array_filter($st->fetchAll(), 'watch_in_schedule'));
+}
+
+/** Ar dabar stebėjimo tvarkaraščio laikas (tuščias tvarkaraštis = visada). */
+function watch_in_schedule(array $w, ?int $ts = null): bool
+{
+    $ts = $ts ?? time();
+    $days = trim((string)($w['sched_days'] ?? ''));
+    if ($days !== '') {
+        $dow = (int)date('N', $ts); // 1 (pirmadienis) – 7 (sekmadienis)
+        if (!in_array((string)$dow, array_map('trim', explode(',', $days)), true)) {
+            return false;
+        }
+    }
+    $from = (string)($w['sched_from'] ?? '');
+    $to = (string)($w['sched_to'] ?? '');
+    if (preg_match('/^\d{1,2}:\d{2}$/', $from) && preg_match('/^\d{1,2}:\d{2}$/', $to) && $from !== $to) {
+        $toMin = fn($s) => (int)explode(':', $s)[0] * 60 + (int)explode(':', $s)[1];
+        $now = (int)date('G', $ts) * 60 + (int)date('i', $ts);
+        $f = $toMin($from);
+        $t = $toMin($to);
+        $in = $f < $t ? ($now >= $f && $now < $t) : ($now >= $f || $now < $t);
+        if (!$in) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /** Skaičių istorija grafikui: JSON [[laikas, reikšmė], ...], įrašoma tik pasikeitus. */

@@ -76,6 +76,8 @@ try {
                 'user_agent' => (string)($input['user_agent'] ?? 'mobile'),
                 'render_js' => !empty($input['render_js']),
                 'check_from' => in_array($input['check_from'] ?? '', ['server', 'auto', 'agent'], true) ? $input['check_from'] : (agents_all() ? 'auto' : 'server'),
+                'extract_regex' => (string)($input['extract_regex'] ?? ''),
+                'keyword_all' => !empty($input['keyword_all']),
             ];
             if (!preg_match('~^https?://~i', $w['url'])) {
                 out(['ok' => false, 'error' => 'Įrašykite adresą (https://...)']);
@@ -88,13 +90,17 @@ try {
             if (!$ex['ok']) {
                 out(['ok' => false, 'error' => $ex['error']]);
             }
-            $cmp = comparable_text($ex['content'], $w);
+            $content = $ex['content'];
+            if (trim((string)$w['extract_regex']) !== '') {
+                $content = apply_extract($content, (string)$w['extract_regex']);
+            }
+            $cmp = comparable_text($content, $w);
             $info = '';
             if ($w['compare_mode'] === 'number') {
-                $n = parse_number($ex['content']);
+                $n = parse_number($content);
                 $info = $n === null ? 'Skaičius nerastas!' : 'Rastas skaičius: ' . format_number($n);
             } elseif (str_starts_with($w['compare_mode'], 'keyword')) {
-                $info = keyword_found($cmp, $w['keyword']) ? 'Frazė šiuo metu RASTA' : 'Frazė šiuo metu NERASTA';
+                $info = keyword_found($cmp, $w['keyword'], !empty($w['keyword_all'])) ? 'Frazė šiuo metu RASTA' : 'Frazė šiuo metu NERASTA';
             } elseif ($w['compare_mode'] === 'added' && trim($w['keyword']) !== '') {
                 $n = count(array_filter(explode("\n", $cmp), fn($l) => keyword_found($l, $w['keyword'])));
                 $info = "Eilučių su filtru: $n";

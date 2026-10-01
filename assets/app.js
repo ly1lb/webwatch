@@ -234,8 +234,10 @@
         selector: scope === 'element' ? $('#f-selector').value : '',
         compare_mode: form.querySelector('input[name="compare_mode"]:checked').value,
         keyword: $('#f-keyword').value,
+        keyword_all: !!(form.querySelector('input[name="keyword_all"]') || {}).checked,
         ignore_numbers: $('#f-ignore-numbers').checked,
-        ignore_regex: $('#f-ignore-regex').value
+        ignore_regex: $('#f-ignore-regex').value,
+        extract_regex: (form.querySelector('input[name="extract_regex"]') || {}).value || ''
       }).then(function (r) {
         busy(btn, false);
         box.hidden = false;
@@ -402,6 +404,15 @@
       var okQ = !q || c.dataset.search.indexOf(q) >= 0;
       var okT = !activeTag || c.dataset.tags.split('|').indexOf(activeTag) >= 0;
       c.hidden = !(okQ && okT);
+    });
+    // Paslepiam tuščių aplankų antraštes
+    $$('.folder-head').forEach(function (h) {
+      var vis = false, n = h.nextElementSibling;
+      while (n && !n.classList.contains('folder-head')) {
+        if (n.classList.contains('watch-card') && !n.hidden) { vis = true; break; }
+        n = n.nextElementSibling;
+      }
+      h.hidden = !vis;
     });
   }
   if (search) search.addEventListener('input', filterList);
