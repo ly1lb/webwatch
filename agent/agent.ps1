@@ -12,7 +12,7 @@ param([switch]$Install, [switch]$Uninstall)
 $Server = "__WW_SERVER__"
 $Token  = "__WW_TOKEN__"
 $Name   = "__WW_NAME__"
-$Version = "4"
+$Version = "5"
 $PollWait = 25
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
@@ -117,6 +117,54 @@ function Invoke-BrowserFetch($url, $ua) {
     }
 }
 
+function Invoke-BrowserScreenshot($url, $ua) {
+    # Padaro puslapio ekrano nuotrauka (PNG) per vietine narsykle - vaizdiniam stebejimui.
+    if ($script:BrowserExe -eq "?") {
+        $script:BrowserExe = Find-Browser
+        if ($script:BrowserExe) { Write-Host "Rasta narsykle sudetingiems puslapiams: $($script:BrowserExe)" }
+        else { Write-Host "Narsykle nerasta - ekrano nuotraukai idiekite Chrome arba Edge." }
+    }
+    if (-not $script:BrowserExe) { return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle nerasta (ekrano nuotraukai reikia Chrome/Edge)" } }
+    $profile = Join-Path $env:TEMP ("wwshot-" + [Guid]::NewGuid().ToString("N"))
+    $outPng = Join-Path $profile "shot.png"
+    try {
+        New-Item -ItemType Directory -Force -Path $profile | Out-Null
+        $q = @(
+            "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+            "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--disable-dev-shm-usage",
+            "--force-device-scale-factor=1", "--window-size=1280,2000",
+            "--user-data-dir=`"$profile`"", "--user-agent=`"$ua`"",
+            "--virtual-time-budget=10000", "--screenshot=`"$outPng`"", "`"$url`""
+        ) -join " "
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:BrowserExe
+        $psi.Arguments = $q
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if (-not $p.WaitForExit(80000)) {
+            try { $p.Kill() } catch {}
+            return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle neatsake laiku" }
+        }
+        if (-not (Test-Path $outPng) -or (Get-Item $outPng).Length -lt 100) {
+            # Senesne narsykle - bandome su senu headless rezimu
+            $psi.Arguments = $psi.Arguments.Replace("--headless=new", "--headless")
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $p.WaitForExit(80000) | Out-Null
+        }
+        if ((Test-Path $outPng) -and (Get-Item $outPng).Length -ge 100) {
+            $bytes = [IO.File]::ReadAllBytes($outPng)
+            return @{ status = 200; body = $bytes; ctype = "image/png"; err = "" }
+        }
+        return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "nepavyko padaryti ekrano nuotraukos" }
+    } catch {
+        return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykles klaida: $($_.Exception.Message)" }
+    } finally {
+        try { if ($p -and -not $p.HasExited) { $p.Kill() } } catch {}
+        Remove-Item -Recurse -Force -Path $profile -ErrorAction SilentlyContinue
+    }
+}
+
 Log "WebWatch tikrinimo taskas '$Name' paleistas. Serveris: $Server"
 Write-Host "Palikite si langa atidaryta (arba naudokite -Install automatiniam paleidimui)."
 
@@ -134,7 +182,12 @@ while ($true) {
         if ($job.headers) { $job.headers.PSObject.Properties | ForEach-Object { if ($_.Name) { $h[$_.Name] = $_.Value } } }
 
         $status = 0; $bodyBytes = [byte[]]@(); $finalUrl = $job.url; $ctype = ""; $err = ""
-        if (-not $job.browser) {
+        if ($job.shot) {
+            # Vaizdinis stebejimas - ekrano nuotrauka per vietine narsykle
+            $s = Invoke-BrowserScreenshot $job.url $job.ua
+            $status = $s.status; $bodyBytes = $s.body; $ctype = $s.ctype; $err = $s.err; $finalUrl = $job.url
+        }
+        elseif (-not $job.browser) {
             try {
                 $r = Invoke-WebRequest -Uri $job.url -Headers $h -TimeoutSec 45 -MaximumRedirection 8 -UseBasicParsing -ErrorAction Stop
                 $status = [int]$r.StatusCode
@@ -152,7 +205,7 @@ while ($true) {
 
         # Uzblokuota arba reikia JS -> per vietine narsykle (tikras atspaudas)
         $bodyTxt = if ($bodyBytes.Length) { [Text.Encoding]::UTF8.GetString($bodyBytes, 0, [Math]::Min(30000, $bodyBytes.Length)) } else { "" }
-        if ($job.browser -or $status -in 401,403,405,406,429,451,503 -or ($bodyTxt -match $ChallengeRe)) {
+        if (-not $job.shot -and ($job.browser -or $status -in 401,403,405,406,429,451,503 -or ($bodyTxt -match $ChallengeRe))) {
             if (-not $job.browser) { Log "  uzblokuota (HTTP $status) - bandau per vietine narsykle..." }
             $b = Invoke-BrowserFetch $job.url $job.ua
             if ($b) { $status = $b.status; $bodyBytes = $b.body; $ctype = $b.ctype; $err = $b.err; $finalUrl = $job.url }

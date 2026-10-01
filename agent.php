@@ -79,7 +79,7 @@ if ($action === 'poll') {
                 return $claim->rowCount() === 1;
             });
             if ($claimed) {
-                $st = $db->prepare('SELECT id, url, headers, ua, browser FROM agent_requests WHERE id = ?');
+                $st = $db->prepare('SELECT id, url, headers, ua, browser, shot FROM agent_requests WHERE id = ?');
                 $st->execute([$row['id']]);
                 $job = $st->fetch();
                 $headers = [];
@@ -93,6 +93,7 @@ if ($action === 'poll') {
                     'ua' => $job['ua'],
                     'headers' => (object)$headers,
                     'browser' => (bool)$job['browser'],
+                    'shot' => (bool)$job['shot'],
                 ]]);
             }
         }

@@ -275,6 +275,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $wid = (int)($_POST['id'] ?? 0);
         db_write('DELETE FROM changes WHERE watch_id = ?', [$wid]);
         db_write('DELETE FROM watches WHERE id = ?', [$wid]);
+        remove_shots_dir($wid);
         flash('Ištrinta');
         redirect('./');
     }
@@ -330,7 +331,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($do === 'clear_history') {
         $id = (int)($_POST['id'] ?? 0);
-        db()->prepare('DELETE FROM changes WHERE watch_id = ?')->execute([$id]);
+        db_write('DELETE FROM changes WHERE watch_id = ?', [$id]);
+        // Pašalinam pokyčių nuotraukas (paliekam dabartinę bazę)
+        foreach (glob(shots_dir($id) . '/*-*.png') ?: [] as $f) {
+            @unlink($f);
+        }
         flash('Istorija išvalyta');
         redirect('?view=watch&id=' . $id);
     }
@@ -795,7 +800,7 @@ function view_watch(?array $flash): void
         db()->prepare('UPDATE watches SET unseen = 0 WHERE id = ?')->execute([$id]);
     }
     // Turinys nekraunamas visiems įrašams – skirtumai atsisiunčiami tik atidarius (api.php?action=diff).
-    $st = db()->prepare('SELECT id, created, summary, change_pct, old_content IS NOT NULL AS has_old FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
+    $st = db()->prepare('SELECT id, created, summary, change_pct, has_shot, old_content IS NOT NULL AS has_old FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
     $st->execute([$id]);
     $changes = $st->fetchAll();
     page_start(watch_title($w), true, 'watch');
@@ -888,14 +893,32 @@ function view_watch(?array $flash): void
         <p class="muted">Pokyčių dar neužfiksuota.</p>
     <?php else: ?>
         <?php foreach ($changes as $i => $c): ?>
-            <?php $hasDiff = in_array($w['compare_mode'], ['text', 'added', 'html'], true) && $c['has_old']; ?>
+            <?php
+            $hasShot = !empty($c['has_shot']);
+            $hasDiff = !$hasShot && in_array($w['compare_mode'], ['text', 'added', 'html'], true) && $c['has_old'];
+            ?>
             <details class="card change" <?= $i === 0 ? 'open' : '' ?> <?= $hasDiff ? 'data-diff="' . (int)$c['id'] . '"' : '' ?>>
                 <summary>
                     <span class="ch-date"><?= date('Y-m-d H:i', (int)$c['created']) ?></span>
                     <span class="ch-pct"><?= $c['change_pct'] > 0 ? h(number_format((float)$c['change_pct'], $c['change_pct'] < 1 ? 2 : 0, ',', '')) . ' %' : '' ?></span>
                     <span class="ch-sum"><?= h(mb_substr((string)$c['summary'], 0, 160)) ?></span>
                 </summary>
-                <?php if ($hasDiff): ?>
+                <?php if ($hasShot): ?>
+                    <div class="shots">
+                        <div class="shot-tabs">
+                            <button type="button" class="st-btn on" data-shot="diff">Pakeitimai</button>
+                            <button type="button" class="st-btn" data-shot="new">Dabar</button>
+                            <button type="button" class="st-btn" data-shot="old">Buvo</button>
+                        </div>
+                        <a href="shot.php?change=<?= (int)$c['id'] ?>&t=diff" target="_blank" rel="noopener">
+                            <img class="shot-img" loading="lazy" src="shot.php?change=<?= (int)$c['id'] ?>&t=diff"
+                                 data-diff="shot.php?change=<?= (int)$c['id'] ?>&t=diff"
+                                 data-new="shot.php?change=<?= (int)$c['id'] ?>&t=new"
+                                 data-old="shot.php?change=<?= (int)$c['id'] ?>&t=old" alt="Pakeitimai">
+                        </a>
+                        <p class="hint">Raudonai pažymėta, kas pasikeitė. Bakstelėkite „Dabar“ / „Buvo“ palyginimui, arba paveikslėlį – pilnam dydžiui.</p>
+                    </div>
+                <?php elseif ($hasDiff): ?>
                     <div class="diff"><div class="d-skip">Kraunama…</div></div>
                 <?php else: ?>
                     <pre class="summary"><?= h((string)$c['summary']) ?></pre>
@@ -908,10 +931,19 @@ function view_watch(?array $flash): void
         </form>
     <?php endif; ?>
 
-    <details class="card">
-        <summary>Dabartinis turinys (<?= number_format(mb_strlen((string)$w['last_content']), 0, ',', ' ') ?> simb.)</summary>
-        <pre class="content"><?= h(mb_substr((string)$w['last_content'], 0, 20000)) ?></pre>
-    </details>
+    <?php if ($w['compare_mode'] === 'visual'): ?>
+        <?php if (is_file(shots_dir($id) . '/current.png')): ?>
+            <details class="card">
+                <summary>Dabartinė nuotrauka</summary>
+                <a href="shot.php?watch=<?= $id ?>&t=current" target="_blank" rel="noopener"><img class="shot-img" loading="lazy" src="shot.php?watch=<?= $id ?>&t=current" alt="Dabartinė nuotrauka"></a>
+            </details>
+        <?php endif; ?>
+    <?php else: ?>
+        <details class="card">
+            <summary>Dabartinis turinys (<?= number_format(mb_strlen((string)$w['last_content']), 0, ',', ' ') ?> simb.)</summary>
+            <pre class="content"><?= h(mb_substr((string)$w['last_content'], 0, 20000)) ?></pre>
+        </details>
+    <?php endif; ?>
     <?php
     page_end();
 }

@@ -52,7 +52,7 @@ function agent_by_token(string $token): ?array
  * Parsiunčia puslapį per nuotolinius tikrinimo taškus, eilės tvarka su perdavimu kitam.
  * Grąžina tą patį formatą kaip fetch_url() + 'agent' (kurio taško vardas atliko).
  */
-function agent_fetch(string $url, array $headers, string $ua, bool $render = false): array
+function agent_fetch(string $url, array $headers, string $ua, bool $render = false, bool $shot = false): array
 {
     $res = ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'error' => '', 'blocked' => false, 'agent' => ''];
     $db = db();
@@ -72,7 +72,7 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
             continue; // atsijungusį praleidžiame
         }
         $anyTried = true;
-        $r = agent_dispatch($db, (int)$agent['id'], $url, $headers, $ua, $render);
+        $r = agent_dispatch($db, (int)$agent['id'], $url, $headers, $ua, $render, $shot);
         $r['agent'] = (string)$agent['name'];
 
         if ($r['node_failed']) {
@@ -110,12 +110,12 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
  * Sukuria darbą konkrečiam kompiuteriui ir laukia rezultato.
  * Grąžina fetch_url() formatą + 'node_failed' (ar sutriko pats taškas, ne svetainė).
  */
-function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, string $ua, bool $render): array
+function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, string $ua, bool $render, bool $shot = false): array
 {
     $res = ['ok' => false, 'status' => 0, 'body' => '', 'final_url' => $url, 'error' => '', 'blocked' => false, 'node_failed' => false];
 
-    db_write('INSERT INTO agent_requests (created, url, headers, ua, browser, target_agent) VALUES (?, ?, ?, ?, ?, ?)',
-        [time(), $url, implode("\n", $headers), WW_UA[$ua] ?? WW_UA['desktop'], $render ? 1 : 0, $agentId]);
+    db_write('INSERT INTO agent_requests (created, url, headers, ua, browser, target_agent, shot) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [time(), $url, implode("\n", $headers), WW_UA[$ua] ?? WW_UA['desktop'], $render ? 1 : 0, $agentId, $shot ? 1 : 0]);
     $id = (int)$db->lastInsertId();
     @set_time_limit(WW_AGENT_RESULT_TIMEOUT + 30);
 
@@ -169,6 +169,17 @@ function agent_interpret(array $r, string $url): array
     if ($r['error'] !== '' && (string)$r['body'] === '') {
         $res['error'] = (string)$r['error'];
         $res['node_failed'] = true;
+        return $res;
+    }
+    // Dvejetainis turinys (ekrano nuotrauka ir pan.) – NEGALIMA kišti per to_utf8,
+    // nes jis sugadintų PNG baitus. Grąžiname žaliavą tokią, kokia yra.
+    $isBinary = !empty($r['shot']) || stripos((string)$r['content_type'], 'image/') === 0;
+    if ($isBinary) {
+        $res['body'] = (string)$r['body'];
+        $res['ok'] = $res['status'] < 400;
+        if (!$res['ok']) {
+            $res['error'] = 'Svetainė grąžino HTTP ' . $res['status'];
+        }
         return $res;
     }
     $body = to_utf8((string)$r['body'], (string)$r['content_type']);

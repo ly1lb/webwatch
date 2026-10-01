@@ -378,6 +378,22 @@
     }
   }
 
+  /* ---------------- Vaizdinio stebėjimo nuotraukų perjungimas ---------------- */
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.st-btn') : null;
+    if (!btn) return;
+    var wrap = btn.closest('.shots');
+    var img = wrap.querySelector('.shot-img');
+    var which = btn.dataset.shot;
+    if (img && img.dataset[which]) {
+      img.src = img.dataset[which];
+      var link = img.closest('a');
+      if (link) link.href = img.dataset[which];
+    }
+    wrap.querySelectorAll('.st-btn').forEach(function (b) { b.classList.toggle('on', b === btn); });
+  });
+
   /* ---------------- Pokyčių skirtumai (kraunami atidarius) ---------------- */
 
   function loadDiff(d) {

@@ -286,3 +286,10 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .wstats b { color: var(--text); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 34px; margin: 6px 0; }
 .spark i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; opacity: .7; }
+
+/* Vaizdinis stebėjimas (ekrano nuotraukos) */
+.shots { margin-top: 4px; }
+.shot-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.st-btn { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; }
+.st-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.shot-img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; background: #fff; }

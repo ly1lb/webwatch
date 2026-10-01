@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.5.0');
+define('WW_VERSION', '1.6.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -22,6 +22,7 @@ require_once __DIR__ . '/diff.php';
 require_once __DIR__ . '/extract.php';
 require_once __DIR__ . '/fetch.php';
 require_once __DIR__ . '/agent.php';
+require_once __DIR__ . '/visual.php';
 require_once __DIR__ . '/webpush.php';
 require_once __DIR__ . '/mailer.php';
 require_once __DIR__ . '/notify.php';
@@ -225,6 +226,9 @@ function migrate(PDO $pdo): void
     ]);
     add_columns($pdo, 'changes', [
         'has_shot' => 'INTEGER NOT NULL DEFAULT 0',          // ar yra ekrano nuotraukos
+    ]);
+    add_columns($pdo, 'agent_requests', [
+        'shot' => 'INTEGER NOT NULL DEFAULT 0',              // ar prašoma ekrano nuotraukos
     ]);
 }
 

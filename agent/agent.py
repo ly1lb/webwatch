@@ -33,7 +33,7 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "4"
+VERSION = "5"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 45
@@ -132,6 +132,39 @@ def browser_fetch(url, ua):
         shutil.rmtree(profile, ignore_errors=True)
 
 
+def browser_screenshot(url, ua):
+    """Padaro puslapio ekrano nuotrauką (PNG) per vietinę naršyklę."""
+    exe = browser_path()
+    if not exe:
+        return 0, b"", url, "", "naršyklė nerasta (ekrano nuotraukai reikia Chrome/Edge)"
+    profile = tempfile.mkdtemp(prefix="wwshot-")
+    out_png = os.path.join(profile, "shot.png")
+    try:
+        args = [
+            exe, "--headless=new", "--disable-gpu", "--no-first-run",
+            "--no-default-browser-check", "--disable-extensions", "--mute-audio",
+            "--no-sandbox", "--disable-dev-shm-usage", "--hide-scrollbars",
+            "--force-device-scale-factor=1", "--window-size=1280,2000",
+            "--user-data-dir=" + profile, "--user-agent=" + ua,
+            "--virtual-time-budget=%d" % BROWSER_WAIT_MS,
+            "--screenshot=" + out_png, url,
+        ]
+        subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20)
+        if not os.path.exists(out_png) or os.path.getsize(out_png) < 100:
+            args[1] = "--headless"  # senesnė naršyklė
+            subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20)
+        if os.path.exists(out_png) and os.path.getsize(out_png) >= 100:
+            with open(out_png, "rb") as f:
+                return 200, f.read(8 * 1024 * 1024), url, "image/png", ""
+        return 0, b"", url, "", "nepavyko padaryti ekrano nuotraukos"
+    except subprocess.TimeoutExpired:
+        return 0, b"", url, "", "naršyklė neatsakė laiku"
+    except Exception as e:  # noqa
+        return 0, b"", url, "", "naršyklės klaida: %s" % e
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+
+
 def api(action, params="", data=None, headers=None, timeout=POLL_WAIT + 15):
     url = "%sagent.php?action=%s%s" % (SERVER, action, params)
     req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET")
@@ -190,6 +223,10 @@ def fetch(job):
     url = job["url"]
     extra = job.get("headers") or {}
     want_browser = bool(job.get("browser"))
+
+    # Ekrano nuotrauka (vaizdinis stebėjimas)
+    if job.get("shot"):
+        return browser_screenshot(url, ua)
 
     # JS puslapiams iškart per naršyklę; kitaip pirma greitas būdas
     if not want_browser:

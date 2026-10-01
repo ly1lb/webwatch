@@ -14,6 +14,7 @@ function compare_modes(): array
         'keyword_disappear' => ['Kai dings žodis / frazė', 'Pvz. „Išparduota“, „Nėra prekyboje“.'],
         'number' => ['Skaičius / kaina pasikeitė', 'Stebi pirmą skaičių elemente (pvz. kainą).'],
         'html' => ['HTML kodas (tiksliausia)', 'Mato ir atributų, nuorodų, paveikslėlių pokyčius.'],
+        'visual' => ['🖼️ Vaizdinis (ekrano nuotrauka)', 'Palygina puslapio nuotraukas ir rodo, kas pasikeitė. Reikia namų kompiuterio su Chrome/Edge.'],
     ];
 }
 
@@ -61,6 +62,9 @@ function apply_extract(string $text, string $regex): string
 function run_check(array $w, bool $sendNotify = true): array
 {
     $now = time();
+    if (($w['compare_mode'] ?? '') === 'visual') {
+        return run_visual_check($w, $sendNotify); // atskiras kelias – ekrano nuotraukos
+    }
     $fetch = fetch_for_watch($w);
     if (!$fetch['ok']) {
         return record_failure($w, $fetch['error'], $sendNotify);
