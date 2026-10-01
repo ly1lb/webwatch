@@ -379,6 +379,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('?view=settings#agents');
     }
+    if ($do === 'agent_rotate') {
+        // Įjungia/išjungia tikrinimo taškų rotaciją (round-robin po visus kompiuterius)
+        set_setting('agent_rotate', isset($_POST['on']) ? '1' : '0');
+        redirect('?view=settings#agents');
+    }
     redirect('./');
 }
 
@@ -1167,6 +1172,16 @@ function view_settings(?array $flash): void
                     </li>
                 <?php endforeach; ?>
             </ul>
+            <?php if (count($agents) > 1): $rot = setting('agent_rotate', '1') !== '0'; ?>
+                <form method="post" class="ag-rotate">
+                    <?= csrf_field() ?><input type="hidden" name="do" value="agent_rotate">
+                    <label class="switch-row">
+                        <input type="checkbox" name="on" value="1" <?= $rot ? 'checked' : '' ?> onchange="this.form.submit()">
+                        <span><b>Sukti per kompiuterius</b> (round-robin) – kiekvienas tikrinimas eina iš kito kompiuterio, kad srautas nesklistų vis iš to paties IP.</span>
+                    </label>
+                    <small class="muted">Išjungus – griežta eilė: pirmas visada pirmas, kiti tik kaip atsarginiai (perdavimas kitam veikia abiem atvejais).</small>
+                </form>
+            <?php endif; ?>
         <?php else: ?>
             <p class="muted">Dar nepridėta nė vieno kompiuterio.</p>
         <?php endif; ?>

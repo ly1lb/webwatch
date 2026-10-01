@@ -37,6 +37,30 @@ function agents_online(): array
     return array_values(array_filter(agents_all(), 'agent_is_online'));
 }
 
+/**
+ * Pasuka tikrinimo taškų sąrašą taip, kad šis tikrinimas prasidėtų nuo kito
+ * kompiuterio nei praeitas (round-robin). Taip srautas pasiskirsto po visus
+ * prisijungusius taškus, o ne lenda vis iš to paties IP. Eilė išlieka ta pati –
+ * tik pradžios taškas pasislenka, todėl perdavimas kitam (failover) nenukenčia.
+ */
+function agents_rotated(array $agents): array
+{
+    $n = count($agents);
+    if ($n < 2) {
+        return $agents;
+    }
+    $last = (int)setting('agent_last_used', '0');
+    $pos = 0;
+    foreach ($agents as $i => $a) {
+        if ((int)$a['id'] === $last) {
+            $pos = $i + 1; // pradedame nuo kito po paskutinio naudoto
+            break;
+        }
+    }
+    $pos %= $n;
+    return array_merge(array_slice($agents, $pos), array_slice($agents, 0, $pos));
+}
+
 function agent_by_token(string $token): ?array
 {
     if (strlen($token) < 20) {
@@ -64,6 +88,14 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
         return $res;
     }
 
+    // Rotacija: kad srautas nesklistų vis iš to paties IP, kiekvieną kartą pradedame
+    // nuo kito prisijungusio kompiuterio (round-robin). Perdavimas kitam (failover)
+    // veikia kaip anksčiau. Galima išjungti nustatymu agent_rotate=0 – tada griežta
+    // prioriteto eilė (pirmas visada pirmas, kiti – tik atsarginiai).
+    if (setting('agent_rotate', '1') !== '0') {
+        $agents = agents_rotated($agents);
+    }
+
     $lastBlocked = null;
     $lastFail = null;
     $anyTried = false;
@@ -82,8 +114,9 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
             $lastFail = $r;
             continue;
         }
-        // Sėkmingą darbą pažymime (išvalome seną klaidą)
+        // Sėkmingą darbą pažymime (išvalome seną klaidą) ir įsimename kaip paskutinį naudotą (rotacijai)
         db_write("UPDATE agents SET last_error = '' WHERE id = ?", [$agent['id']]);
+        set_setting('agent_last_used', (string)$agent['id']);
         // Kompiuteris atsakė. Jei svetainė jį irgi užblokavo – gal kita vieta praeis
         if ($r['blocked']) {
             $lastBlocked = $r;

@@ -293,3 +293,9 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .st-btn { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; }
 .st-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .shot-img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+
+/* Tikrinimo taškų rotacijos jungiklis */
+.ag-rotate{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.switch-row{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.switch-row input{margin-top:3px;flex:0 0 auto}
+.ag-rotate small{display:block;margin-top:6px}
