@@ -20,11 +20,35 @@ function shots_dir(int $watchId): string
     return $dir;
 }
 
+/** Agento versija iš įrašo „os versija naršyklė" (poll perduoda v=N). 0 – nežinoma. */
+function agent_version(array $a): int
+{
+    $parts = preg_split('/\s+/', trim((string)($a['info'] ?? '')));
+    return (int)($parts[1] ?? 0); // antras žodis – versija
+}
+
+/** Ar bent vienas prisijungęs taškas moka daryti ekrano nuotraukas (v≥5). */
+function agents_support_shots(): bool
+{
+    foreach (agents_online() as $a) {
+        if (agent_version($a) >= 5 || agent_version($a) === 0) {
+            return true; // 0 – nežinoma (dar nepollino po atnaujinimo); neblokuojam
+        }
+    }
+    return false;
+}
+
 /** Padaro ekrano nuotrauką per namų kompiuterį. Grąžina ['ok','png','error']. */
 function fetch_screenshot(array $w): array
 {
     if (!agents_all()) {
         return ['ok' => false, 'png' => '', 'error' => 'Vaizdiniam stebėjimui reikia namų kompiuterio (su Chrome/Edge)'];
+    }
+    if (!agents_online()) {
+        return ['ok' => false, 'png' => '', 'error' => 'Nė vienas kompiuteris šiuo metu neprisijungęs. Paleiskite agento programą.'];
+    }
+    if (!agents_support_shots()) {
+        return ['ok' => false, 'png' => '', 'error' => 'Kompiuteryje sukasi sena agento versija (be ekrano nuotraukų). Nustatymuose prie taško spauskite „Įdiegti" ir paleiskite komandą iš naujo (reikia agento v5).'];
     }
     $r = agent_fetch((string)$w['url'], parse_header_lines((string)($w['headers'] ?? '')),
         ($w['user_agent'] ?? 'desktop') === 'mobile' ? 'mobile' : 'desktop', false, true);
@@ -32,7 +56,17 @@ function fetch_screenshot(array $w): array
         return ['ok' => false, 'png' => '', 'error' => $r['error'] ?: 'Nepavyko padaryti ekrano nuotraukos'];
     }
     if (strncmp($r['body'], "\x89PNG", 4) !== 0) {
-        return ['ok' => false, 'png' => '', 'error' => 'Kompiuteris grąžino ne paveikslėlį (ar įdiegta Chrome/Edge?)'];
+        // Diagnostika: kodėl ne PNG?
+        $head = ltrim(substr($r['body'], 0, 200));
+        if ($head === '') {
+            $err = 'Kompiuteris grąžino tuščią atsakymą – naršyklė nepadarė nuotraukos (ar įdiegta Chrome/Edge?).';
+        } elseif (stripos($head, '<!doctype') === 0 || stripos($head, '<html') === 0 || $head[0] === '<') {
+            // Agentas grąžino HTML, o ne nuotrauką – beveik visada sena agento versija.
+            $err = 'Kompiuteris grąžino HTML, o ne nuotrauką – greičiausiai sena agento versija. Prie taško spauskite „Įdiegti" ir paleiskite komandą iš naujo (agentas v5).';
+        } else {
+            $err = 'Kompiuteris grąžino ne paveikslėlį (ar įdiegta Chrome/Edge tame kompiuteryje?).';
+        }
+        return ['ok' => false, 'png' => '', 'error' => $err];
     }
     return ['ok' => true, 'png' => $r['body'], 'error' => '', 'agent' => $r['agent'] ?? ''];
 }
