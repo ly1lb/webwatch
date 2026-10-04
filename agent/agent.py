@@ -33,11 +33,15 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "5"
+VERSION = "6"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
-FETCH_TIMEOUT = 45
-BROWSER_WAIT_MS = 10000           # kiek laiko naršyklei leisti vykdyti JS (Cloudflare patikra)
+FETCH_TIMEOUT = 30                # greitam (be JS) parsiuntimui
+BROWSER_WAIT_MS = 8000            # kiek laiko naršyklei leisti vykdyti JS
+BROWSER_TIMEOUT = 35              # KIETAS naršyklės proceso limitas (s). Svarbu: agentas
+                                  # privalo baigti greičiau nei serveris laukia (110 s), kitaip
+                                  # užstringa ir blokuoja kitus darbus. Po timeout'o NEBANDOMA
+                                  # antrą kartą – tai tik vėl užtruktų tiek pat.
 BROWSER_HEADERS = {
     "mobile": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
               "(KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
@@ -102,6 +106,16 @@ def browser_path():
     return BROWSER_PATH
 
 
+def _run_browser(args):
+    """Paleidžia naršyklę su KIETU laiko limitu. Grąžina (stdout, timed_out).
+    Po timeout'o procesas nužudomas, kad agentas neliktų įstrigęs."""
+    try:
+        r = subprocess.run(args, capture_output=True, timeout=BROWSER_TIMEOUT)
+        return r.stdout, False
+    except subprocess.TimeoutExpired:
+        return b"", True
+
+
 def browser_fetch(url, ua):
     """Parsiunčia puslapį per vietinę naršyklę (tikras TLS atspaudas + JavaScript)."""
     exe = browser_path()
@@ -116,16 +130,18 @@ def browser_fetch(url, ua):
             "--user-data-dir=" + profile, "--user-agent=" + ua,
             "--virtual-time-budget=%d" % BROWSER_WAIT_MS, "--dump-dom", url,
         ]
-        out = subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20).stdout
-        if (not out or len(out) < 200) and b"--headless=new" not in out:
-            # senesnė naršyklė nemoka „=new“
+        out, timed_out = _run_browser(args)
+        if timed_out:
+            return 0, b"", url, "", "naršyklė neatsakė per %ss (per lėtas/sunkus puslapis)" % BROWSER_TIMEOUT
+        if not out or len(out) < 200:
+            # tuščia, bet NE timeout – gal senesnė naršyklė nemoka „=new“; bandom seną režimą
             args[1] = "--headless"
-            out = subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20).stdout
+            out2, timed_out = _run_browser(args)
+            if not timed_out and out2:
+                out = out2
         if out and not CHALLENGE_RE.search(out[:30000]):
             return 200, out, url, "text/html; charset=utf-8", ""
         return 403, out or b"", url, "text/html", "naršyklė negavo turinio (galimai reikia CAPTCHA)"
-    except subprocess.TimeoutExpired:
-        return 0, b"", url, "", "naršyklė neatsakė laiku"
     except Exception as e:  # noqa
         return 0, b"", url, "", "naršyklės klaida: %s" % e
     finally:
@@ -149,16 +165,18 @@ def browser_screenshot(url, ua):
             "--virtual-time-budget=%d" % BROWSER_WAIT_MS,
             "--screenshot=" + out_png, url,
         ]
-        subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20)
+        _, timed_out = _run_browser(args)
+        if timed_out:
+            return 0, b"", url, "", "naršyklė neatsakė per %ss (per lėtas/sunkus puslapis)" % BROWSER_TIMEOUT
         if not os.path.exists(out_png) or os.path.getsize(out_png) < 100:
-            args[1] = "--headless"  # senesnė naršyklė
-            subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT + 20)
+            args[1] = "--headless"  # senesnė naršyklė (ne po timeout'o)
+            _, timed_out = _run_browser(args)
+            if timed_out:
+                return 0, b"", url, "", "naršyklė neatsakė per %ss" % BROWSER_TIMEOUT
         if os.path.exists(out_png) and os.path.getsize(out_png) >= 100:
             with open(out_png, "rb") as f:
                 return 200, f.read(8 * 1024 * 1024), url, "image/png", ""
         return 0, b"", url, "", "nepavyko padaryti ekrano nuotraukos"
-    except subprocess.TimeoutExpired:
-        return 0, b"", url, "", "naršyklė neatsakė laiku"
     except Exception as e:  # noqa
         return 0, b"", url, "", "naršyklės klaida: %s" % e
     finally:
@@ -259,9 +277,9 @@ def send_result(job_id, status, body, final_url, ctype, error):
         "Content-Type": "text/plain",
     }
     last = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            api("result", "&id=%d" % job_id, data=payload, headers=headers, timeout=60).read()
+            api("result", "&id=%d" % job_id, data=payload, headers=headers, timeout=40).read()
             return
         except Exception as e:  # noqa
             last = e
@@ -303,10 +321,19 @@ def run():
             if not job:
                 idle_backoff = 2
                 continue
-            log("→ Tikrinu: %s" % job["url"])
+            log("→ Tikrinu: %s%s" % (job["url"], " (ekrano nuotrauka)" if job.get("shot") else (" (naršyklė)" if job.get("browser") else "")))
+            t0 = time.time()
             status, body, final_url, ctype, error = fetch(job)
-            send_result(job["id"], status, body, final_url, ctype, error)
-            log("  grąžinta serveriui (HTTP %s%s, %d baitų)" % (status, ", klaida: " + error if error else "", len(body or b"")))
+            t1 = time.time()
+            try:
+                send_result(job["id"], status, body, final_url, ctype, error)
+            except Exception as e:  # noqa
+                log("  KLAIDA grąžinant serveriui po %.1fs (%d baitų): %s – gali blokuoti hostingo WAF arba per didelis failas" % (t1 - t0, len(body or b""), e))
+                idle_backoff = 2
+                continue
+            t2 = time.time()
+            log("  grąžinta serveriui: HTTP %s, %d baitų (parsiuntė %.1fs, išsiuntė %.1fs)%s"
+                % (status, len(body or b""), t1 - t0, t2 - t1, ", klaida: " + error if error else ""))
             idle_backoff = 2
         except urllib.error.HTTPError as e:
             if e.code == 403:

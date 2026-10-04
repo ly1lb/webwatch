@@ -12,7 +12,7 @@ param([switch]$Install, [switch]$Uninstall)
 $Server = "__WW_SERVER__"
 $Token  = "__WW_TOKEN__"
 $Name   = "__WW_NAME__"
-$Version = "5"
+$Version = "6"
 $PollWait = 25
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
@@ -85,7 +85,7 @@ function Invoke-BrowserFetch($url, $ua) {
             "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
             "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--disable-dev-shm-usage",
             "--user-data-dir=`"$profile`"", "--user-agent=`"$ua`"",
-            "--virtual-time-budget=10000", "--dump-dom", "`"$url`""
+            "--virtual-time-budget=8000", "--dump-dom", "`"$url`""
         ) -join " "
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:BrowserExe
@@ -99,7 +99,7 @@ function Invoke-BrowserFetch($url, $ua) {
         # Skaitom abu srautus asinchroniškai, kad vamzdis neužsipildytų ir neužstrigtų
         $so = $p.StandardOutput.ReadToEndAsync()
         $se = $p.StandardError.ReadToEndAsync()
-        if (-not $p.WaitForExit(60000)) {
+        if (-not $p.WaitForExit(35000)) {
             try { $p.Kill() } catch {}
             return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle neatsake laiku" }
         }
@@ -134,7 +134,7 @@ function Invoke-BrowserScreenshot($url, $ua) {
             "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--disable-dev-shm-usage",
             "--force-device-scale-factor=1", "--window-size=1280,2000",
             "--user-data-dir=`"$profile`"", "--user-agent=`"$ua`"",
-            "--virtual-time-budget=10000", "--screenshot=`"$outPng`"", "`"$url`""
+            "--virtual-time-budget=8000", "--screenshot=`"$outPng`"", "`"$url`""
         ) -join " "
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:BrowserExe
@@ -142,7 +142,7 @@ function Invoke-BrowserScreenshot($url, $ua) {
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $p = [System.Diagnostics.Process]::Start($psi)
-        if (-not $p.WaitForExit(80000)) {
+        if (-not $p.WaitForExit(35000)) {
             try { $p.Kill() } catch {}
             return @{ status = 0; body = [byte[]]@(); ctype = ""; err = "narsykle neatsake laiku" }
         }
@@ -150,7 +150,7 @@ function Invoke-BrowserScreenshot($url, $ua) {
             # Senesne narsykle - bandome su senu headless rezimu
             $psi.Arguments = $psi.Arguments.Replace("--headless=new", "--headless")
             $p = [System.Diagnostics.Process]::Start($psi)
-            $p.WaitForExit(80000) | Out-Null
+            $p.WaitForExit(35000) | Out-Null
         }
         if ((Test-Path $outPng) -and (Get-Item $outPng).Length -ge 100) {
             $bytes = [IO.File]::ReadAllBytes($outPng)
@@ -227,7 +227,7 @@ while ($true) {
             "Content-Type" = "text/plain"
         }
         $sent = $false
-        for ($try = 0; $try -lt 3 -and -not $sent; $try++) {
+        for ($try = 0; $try -lt 2 -and -not $sent; $try++) {
             try {
                 Invoke-RestMethod -Uri "$($Server)agent.php?action=result&id=$($job.id)" -Method Post -Headers $headers -Body $payload -TimeoutSec 60 | Out-Null
                 $sent = $true

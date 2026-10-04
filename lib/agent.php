@@ -125,10 +125,17 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
         $r['agent'] = (string)$agent['name'];
 
         if ($r['node_failed']) {
-            // Sutriko pats kompiuteris ar jo ryšys – perduodame kitam. Priežastį įsimename matomoje vietoje.
             db_write('UPDATE agents SET fails = fails + 1, last_error = ? WHERE id = ?', [mb_substr($r['error'], 0, 300), $agent['id']]);
-            ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – perduodama kitam');
             $lastFail = $r;
+            // Jei kompiuteris darbą PAĖMĖ, bet nespėjo grąžinti (lėtas/sunkus puslapis) –
+            // to paties puslapio siųsti kitiems kompiuteriams nėra prasmės: jie irgi įstrigtų
+            // tiek pat laiko, o taip po vieną užstringa visi. Sustojam ir grąžinam klaidą.
+            if (($r['stage'] ?? '') === 'no_result') {
+                ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – nebesiunčiama kitiems (puslapis per lėtas visiems)');
+                break;
+            }
+            // Kompiuteris darbo nepaėmė (atsijungęs/sena versija) – bandom kitą.
+            ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – perduodama kitam');
             continue;
         }
         // Sėkmingą darbą pažymime (išvalome seną klaidą) ir įsimename kaip paskutinį naudotą (rotacijai)
