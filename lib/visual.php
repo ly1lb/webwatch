@@ -164,13 +164,16 @@ function run_visual_check(array $w, bool $sendNotify): array
         return record_failure($w, $shot['error'], $sendNotify);
     }
     $png = $shot['png'];
+    if ($sendNotify) {
+        notify_recovered($w); // jei prieš tai neveikė ir apie tai pranešta
+    }
     $dir = shots_dir((int)$w['id']);
     $cur = $dir . '/current.png';
     $first = !is_file($cur);
 
     if ($first) {
         file_put_contents($cur, $png);
-        db_write("UPDATE watches SET last_check=?, last_status='ok', last_error='', fail_count=0, last_content='[screenshot]' WHERE id=?",
+        db_write("UPDATE watches SET last_check=?, last_status='ok', last_error='', fail_count=0, fail_since=0, last_content='[screenshot]' WHERE id=?",
             [$now, $w['id']]);
         return ['ok' => true, 'changed' => false, 'first' => true, 'summary' => '', 'pct' => 0, 'count' => 1];
     }
@@ -192,7 +195,7 @@ function run_visual_check(array $w, bool $sendNotify): array
         file_put_contents($dir . "/$cid-new.png", $png);
         file_put_contents($dir . "/$cid-diff.png", $d['diff']);
         prune_shots($dir, (int)$w['id']);
-        db_write('UPDATE watches SET last_check=?, last_status=\'ok\', last_error=\'\', fail_count=0, last_change=?, unseen=unseen+1 WHERE id=?',
+        db_write('UPDATE watches SET last_check=?, last_status=\'ok\', last_error=\'\', fail_count=0, fail_since=0, last_change=?, unseen=unseen+1 WHERE id=?',
             [$now, $now, $w['id']]);
         $sent = null;
         if ($sendNotify) {
@@ -201,7 +204,7 @@ function run_visual_check(array $w, bool $sendNotify): array
         }
         return ['ok' => true, 'changed' => true, 'first' => false, 'summary' => $summary, 'pct' => $pct, 'count' => 1, 'notified' => $sent];
     }
-    db_write("UPDATE watches SET last_check=?, last_status='ok', last_error='', fail_count=0 WHERE id=?", [$now, $w['id']]);
+    db_write("UPDATE watches SET last_check=?, last_status='ok', last_error='', fail_count=0, fail_since=0 WHERE id=?", [$now, $w['id']]);
     return ['ok' => true, 'changed' => false, 'first' => false, 'summary' => '', 'pct' => $pct, 'count' => 1];
 }
 

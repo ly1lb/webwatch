@@ -110,6 +110,9 @@ function fetch_for_watch(array $w, bool $remember = true): array
 
     $first = null;
     $blocked = null;
+    $blockRes = null;
+    $realBlock = false;   // ar bent vienas būdas gavo TIKRĄ blokavimą (403/429/CAPTCHA), o ne ryšio klaidą
+    $agentErr = '';
     foreach ($chain as $via) {
         switch ($via) {
             case 'direct':
@@ -149,11 +152,25 @@ function fetch_for_watch(array $w, bool $remember = true): array
             // Tikras svetainės atsakymas (pvz. 404) – kiti būdai to nepataisys
             return $r;
         }
+        if ((int)$r['status'] >= 400 || ((int)$r['status'] >= 200 && !empty($r['blocked']))) {
+            $realBlock = true;
+            $blockRes = $r;
+        }
+        if ($via === 'agent' && (string)$r['error'] !== '') {
+            $agentErr = (string)$r['error'];
+        }
         $blocked = $r; // blokavimas arba ryšio triktis – bandome kitą būdą
     }
 
-    $res = $blocked ?? $first;
+    $res = $blockRes ?? $blocked ?? $first;
     $hadAgent = in_array('agent', $chain, true);
+    if (!$realBlock) {
+        // Ne blokavimas, o svetainė nepasiekiama (neveikia, DNS, laiko limitas) – sakome tiesiai
+        $why = trim((string)($first['error'] ?? ''));
+        $res['error'] = 'Nepavyko pasiekti svetainės' . ($why !== '' ? ': ' . $why : '') . '.'
+            . ($agentErr !== '' && $agentErr !== $why ? ' Namų kompiuteriai: ' . $agentErr : '');
+        return $res;
+    }
     if ($res['via'] !== 'service' || !str_contains($res['error'], 'API raktą')) {
         $res['error'] = 'Svetainė blokuoja automatinius tikrinimus (apsauga nuo robotų, HTTP ' . $res['status'] . '). '
             . ($hadAgent

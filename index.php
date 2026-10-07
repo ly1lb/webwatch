@@ -287,6 +287,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'general' => ['quiet_from', 'quiet_to'],
             'bypass' => ['jina_key', 'scrape_provider', 'scrape_key', 'render_api'],
         ];
+        if (($_POST['section'] ?? '') === 'errors') {
+            set_setting('err_channels', implode(',', array_intersect(WW_CHANNELS, (array)($_POST['err_channels'] ?? []))));
+            set_setting('err_after', (string)max(2, min(10, (int)($_POST['err_after'] ?? WW_FAILS_BEFORE_ALERT))));
+            flash('Išsaugota');
+            redirect('?view=settings#errors');
+        }
         if (($_POST['section'] ?? '') === 'bypass') {
             set_setting('bypass_reader', !empty($_POST['bypass_reader']) ? '1' : '0');
         }
@@ -837,7 +843,8 @@ function view_watch(?array $flash): void
         <?= value_chart((string)$w['value_history']) ?>
     <?php endif; ?>
     <?php if ($w['last_status'] === 'error'): ?>
-        <div class="flash err">⚠️ <?= h($w['last_error']) ?> (<?= (int)$w['fail_count'] ?> k. iš eilės)
+        <?php $nextIn = (int)$w['last_check'] + effective_interval_min($w) * 60 - time(); ?>
+        <div class="flash err">⚠️ <?= h($w['last_error']) ?> (<?= (int)$w['fail_count'] ?> k. iš eilės<?= $nextIn > 0 ? ' · kitas bandymas po ' . h(human_duration($nextIn)) : ' · bandoma dabar' ?>)
             <?php if (str_contains((string)$w['last_error'], 'blokuoja')): ?><br><a href="?view=settings#bypass">🛡️ Apsaugos apėjimo nustatymai →</a><?php endif; ?></div>
     <?php endif; ?>
 
@@ -1068,6 +1075,37 @@ function view_settings(?array $flash): void
                 <label>Webhook adresas<input type="url" name="webhook_url" value="<?= h(setting('webhook_url', '')) ?>" placeholder="https://discord.com/api/webhooks/..." autocapitalize="off"></label>
                 <button type="button" class="btn small" data-test-channel="webhook">Siųsti bandomąjį</button>
             </details>
+            <div class="actions"><button class="btn primary">Išsaugoti</button></div>
+        </form>
+    </section>
+
+    <section class="card" id="errors">
+        <h2>⚠️ Pranešimai, kai nepavyksta patikrinti</h2>
+        <?php $errCh = parse_channels((string)setting('err_channels', '')); $errAfter = fails_before_alert(); ?>
+        <form method="post" class="form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="do" value="save_settings">
+            <input type="hidden" name="section" value="errors">
+            <p class="hint">Jei puslapio nepavyksta patikrinti (svetainė neveikia, blokuoja, kompiuteriai nepasiekiami),
+                WebWatch nelaukia kito įprasto tikrinimo – pakartoja <b>kas <?= WW_RETRY_MIN ?> min</b> (arba dažniau, jei toks intervalas).
+                Taip net kartą per parą tikrinamo puslapio bėdą sužinosite per ~<?= ($errAfter - 1) * WW_RETRY_MIN ?> min, o ne po kelių parų.
+                Pranešus toliau tikrinama ne rečiau nei kas <?= WW_DOWN_RECHECK_MIN ?> min, ir gausite žinią, kai vėl veiks.</p>
+            <label>Pranešti po nesėkmių iš eilės
+                <select name="err_after">
+                    <?php for ($i = 2; $i <= 10; $i++): ?><option value="<?= $i ?>" <?= $i === $errAfter ? 'selected' : '' ?>><?= $i ?></option><?php endfor; ?>
+                </select>
+            </label>
+            <fieldset class="channels">
+                <legend>Kur siųsti šiuos pranešimus</legend>
+                <?php foreach (channel_labels() as $ch => [$label, $need]): if ($ch === 'fallback') continue; ?>
+                    <?php $configured = $need === '' || (string)setting($need, '') !== ''; ?>
+                    <label class="check">
+                        <input type="checkbox" name="err_channels[]" value="<?= $ch ?>" <?= in_array($ch, $errCh, true) ? 'checked' : '' ?>>
+                        <span><?= h($label) ?><?php if (!$configured): ?> <a class="muted small" href="?view=settings#channels">(nesukonfigūruota)</a><?php endif; ?></span>
+                    </label>
+                <?php endforeach; ?>
+                <p class="hint">Nieko nepažymėjus – siunčiama ten pat, kur to stebėjimo pakeitimų pranešimai.</p>
+            </fieldset>
             <div class="actions"><button class="btn primary">Išsaugoti</button></div>
         </form>
     </section>

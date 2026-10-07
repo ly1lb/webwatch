@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.7.2');
+define('WW_VERSION', '1.8.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -223,6 +223,7 @@ function migrate(PDO $pdo): void
         'extract_regex' => $sd,                              // ištraukti reikšmę (1-a grupė) prieš lyginant
         'require_regex' => $sd,                              // pranešti tik jei naujas turinys atitinka
         'keyword_all' => 'INTEGER NOT NULL DEFAULT 0',       // raktažodžiai: 1 = visi (IR), 0 = bet kuris (ARBA)
+        'fail_since' => 'INTEGER NOT NULL DEFAULT 0',        // kada prasidėjo nesėkmių serija (įspėjimams)
     ]);
     add_columns($pdo, 'changes', [
         'has_shot' => 'INTEGER NOT NULL DEFAULT 0',          // ar yra ekrano nuotraukos

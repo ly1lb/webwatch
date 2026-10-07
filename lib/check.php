@@ -3,7 +3,52 @@ declare(strict_types=1);
 
 const WW_MAX_CONTENT = 300000;
 const WW_KEEP_CHANGES = 50;
-const WW_FAILS_BEFORE_ALERT = 3;
+const WW_FAILS_BEFORE_ALERT = 3;  // numatytasis; keičiamas Nustatymuose (err_after)
+const WW_RETRY_MIN = 5;          // po nesėkmės kartojama ne rečiau nei kas tiek min (net jei tikrinama kartą per parą)
+const WW_DOWN_RECHECK_MIN = 60;  // po įspėjimo – ne rečiau nei kas tiek min, kad greitai sužinotumėt, kada vėl veikia
+
+/** Po kiek nesėkmių iš eilės pranešti (Nustatymai, 2–10). */
+function fails_before_alert(): int
+{
+    return max(2, min(10, (int)setting('err_after', (string)WW_FAILS_BEFORE_ALERT)));
+}
+
+/** Kanalai įspėjimams apie nepavykusius tikrinimus: Nustatymuose pasirinkti, kitaip – stebėjimo. */
+function alert_channels(array $w): string
+{
+    $c = trim((string)setting('err_channels', ''));
+    return $c !== '' ? $c : (string)$w['notify'];
+}
+
+/**
+ * Kada tikrinti kitą kartą (min). Įprastai – stebėjimo intervalas, bet:
+ *  - po nesėkmės, kol dar nepranešta – ne rečiau nei kas WW_RETRY_MIN min,
+ *    kad kasdien tikrinamo puslapio bėda paaiškėtų per ~10 min, o ne per 3 paras;
+ *  - jau pranešus – ne rečiau nei kas WW_DOWN_RECHECK_MIN min (sužinoti, kada vėl veiks).
+ */
+function effective_interval_min(array $w): int
+{
+    $iv = max(1, (int)$w['interval_min']);
+    $fails = (int)($w['fail_count'] ?? 0);
+    if ($fails <= 0) {
+        return $iv;
+    }
+    return min($iv, $fails < fails_before_alert() ? WW_RETRY_MIN : WW_DOWN_RECHECK_MIN);
+}
+
+/** Jei puslapis prieš tai buvo neveikiantis ir apie tai pranešta – praneša, kad vėl veikia. */
+function notify_recovered(array $w): void
+{
+    if ((int)$w['fail_count'] < fails_before_alert()) {
+        return;
+    }
+    $since = (int)($w['fail_since'] ?? 0);
+    $dur = $since > 0 ? human_duration(time() - $since) : '';
+    notify_user(alert_channels($w), '✅ ' . watch_title($w) . ': vėl veikia',
+        'Puslapį vėl pavyksta patikrinti.'
+        . ($dur !== '' ? "\nNeveikė: " . $dur . ' (' . (int)$w['fail_count'] . ' nesėkm. bandym.).' : ''),
+        app_url() . '?view=watch&id=' . $w['id'], 'watch-err-' . $w['id']);
+}
 
 function compare_modes(): array
 {
@@ -165,7 +210,7 @@ function run_check(array $w, bool $sendNotify = true): array
     }
 
     $db = db();
-    $fields = 'last_check = ?, last_status = ?, last_error = \'\', fail_count = 0';
+    $fields = 'last_check = ?, last_status = ?, last_error = \'\', fail_count = 0, fail_since = 0';
     $params = [$now, 'ok'];
     if (isset($valueHistory)) {
         $fields .= ', value_history = ?';
@@ -188,9 +233,8 @@ function run_check(array $w, bool $sendNotify = true): array
     db_write("UPDATE watches SET $fields WHERE id = ?", $params);
 
     $sent = null;
-    if ($sendNotify && (int)$w['fail_count'] >= WW_FAILS_BEFORE_ALERT && !$changed) {
-        notify_user((string)$w['notify'], '✅ ' . watch_title($w) . ': vėl veikia',
-            'Puslapį vėl pavyksta patikrinti.', app_url() . '?view=watch&id=' . $w['id'], 'watch-err-' . $w['id']);
+    if ($sendNotify && !$changed) {
+        notify_recovered($w);
     }
     if ($changed && $sendNotify) {
         $sent = notify_user(
@@ -214,17 +258,22 @@ function run_check(array $w, bool $sendNotify = true): array
 
 function record_failure(array $w, string $error, bool $sendNotify): array
 {
+    $now = time();
     $fails = (int)$w['fail_count'] + 1;
-    db_write("UPDATE watches SET last_check = ?, last_status = 'error', last_error = ?, fail_count = ? WHERE id = ?",
-        [time(), $error, $fails, $w['id']]);
-    if ($sendNotify && $fails === WW_FAILS_BEFORE_ALERT) {
-        notify_user(
-            (string)$w['notify'],
-            '⚠️ ' . watch_title($w) . ': nepavyksta patikrinti',
-            $error . "\nBandyta " . $fails . ' kartus iš eilės.',
-            app_url() . '?view=watch&id=' . $w['id'],
-            'watch-err-' . $w['id']
-        );
+    $since = $fails === 1 || empty($w['fail_since']) ? $now : (int)$w['fail_since'];
+    db_write("UPDATE watches SET last_check = ?, last_status = 'error', last_error = ?, fail_count = ?, fail_since = ? WHERE id = ?",
+        [$now, $error, $fails, $since, $w['id']]);
+    $limit = fails_before_alert();
+    if ($sendNotify && $fails === $limit) {
+        $w2 = $w;
+        $w2['fail_count'] = $fails;
+        $next = effective_interval_min($w2);
+        $body = 'Nepavyko patikrinti ' . $fails . ' kartus iš eilės'
+            . ($now - $since >= 60 ? ' (pirmą kartą prieš ' . human_duration($now - $since) . ')' : '') . ".\n"
+            . 'Klaida: ' . $error . "\n"
+            . 'Toliau bandysiu kas ' . $next . ' min ir pranešiu, kai vėl pavyks.';
+        notify_user(alert_channels($w), '⚠️ ' . watch_title($w) . ': nepavyksta patikrinti', $body,
+            app_url() . '?view=watch&id=' . $w['id'], 'watch-err-' . $w['id']);
     }
     return ['ok' => false, 'changed' => false, 'error' => $error, 'fails' => $fails];
 }
@@ -232,7 +281,12 @@ function record_failure(array $w, string $error, bool $sendNotify): array
 /** Stebėjimai, kuriuos laikas tikrinti. */
 function due_watches(): array
 {
-    $st = db()->prepare('SELECT * FROM watches WHERE active = 1 AND (last_check IS NULL OR last_check + interval_min * 60 - 30 <= ?) ORDER BY last_check IS NOT NULL, last_check');
+    // Intervalas su pakartojimais po nesėkmės – tokia pati logika kaip effective_interval_min()
+    $lim = fails_before_alert();
+    $iv = 'CASE WHEN fail_count <= 0 THEN interval_min'
+        . ' WHEN fail_count < ' . $lim . ' THEN (CASE WHEN interval_min < ' . WW_RETRY_MIN . ' THEN interval_min ELSE ' . WW_RETRY_MIN . ' END)'
+        . ' ELSE (CASE WHEN interval_min < ' . WW_DOWN_RECHECK_MIN . ' THEN interval_min ELSE ' . WW_DOWN_RECHECK_MIN . ' END) END';
+    $st = db()->prepare("SELECT * FROM watches WHERE active = 1 AND (last_check IS NULL OR last_check + ($iv) * 60 - 30 <= ?) ORDER BY last_check IS NOT NULL, last_check");
     $st->bindValue(1, time(), PDO::PARAM_INT); // kitaip SQLite lygina kaip tekstą
     $st->execute();
     return array_values(array_filter($st->fetchAll(), 'watch_in_schedule'));
