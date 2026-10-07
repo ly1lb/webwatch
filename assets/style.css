@@ -309,3 +309,7 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .ag-log{flex-basis:100%;margin:2px 0 0 calc(1.4em + 26px)}
 .ag-log summary{cursor:pointer;font-size:.8rem;color:var(--muted)}
 .ag-log pre{margin:6px 0 0;padding:10px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font-size:.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto}
+
+/* Diegimo langelis – kad būtų aiškiai matomas paspaudus „Įdiegti" */
+.ag-install{scroll-margin-top:70px;border:2px solid var(--accent,#5b4ff0);border-radius:12px;padding:12px 14px;margin-top:10px}
+.ag-install-note{background:rgba(91,79,240,.08);border-radius:8px;padding:8px 10px;font-size:.88rem}

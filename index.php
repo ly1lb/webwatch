@@ -1212,7 +1212,7 @@ function view_settings(?array $flash): void
                         <span class="ag-btns">
                             <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>
                             <?php if ($i < count($agents) - 1): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="down"><button class="btn small ghost" title="Žemyn">↓</button></form><?php endif; ?>
-                            <a class="btn small" href="?view=settings&agent=<?= $a['id'] ?>#agents">Įdiegti</a>
+                            <a class="btn small" href="?view=settings&agent=<?= $a['id'] ?>#ag-install">Įdiegti</a>
                             <form method="post" onsubmit="return confirm('Ištrinti šį tašką visam laikui? Norėdami tik prijungti kompiuterį iš naujo, spauskite „Įdiegti“, o ne šį mygtuką.')"><?= csrf_field() ?><input type="hidden" name="do" value="delete_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button class="btn small ghost" title="Ištrinti visam laikui">🗑</button></form>
                         </span>
                         <?php if (!empty($a['diag'])): ?>
@@ -1239,9 +1239,12 @@ function view_settings(?array $flash): void
         <?php endif; ?>
 
         <?php if ($newId && ($a = array_values(array_filter($agents, fn($x) => (int)$x['id'] === $newId))[0] ?? null)): $setup = agent_setup($a); ?>
-            <div class="ag-install">
+            <div class="ag-install" id="ag-install">
                 <h3>Įdiegimas: „<?= h($a['name']) ?>“</h3>
-                <p class="hint">Paleiskite <b>tik tame kompiuteryje</b>, kurį norite įdarbinti. Raktas slaptas – kas jį turi, gali prisijungti kaip šis taškas.</p>
+                <p class="ag-install-note">⚠️ Šis mygtukas pats nieko neįdiegia – nukopijuokite žemiau esančią komandą ir paleiskite
+                    <b>tame kompiuteryje</b> („<?= h($a['name']) ?>“). Komanda pati sustabdys ir pakeis seną agentą – atskirai šalinti nereikia.
+                    Po ~30 s prie taško turi atsirasti <b>v<?= agent_shipped_version() ?> ✓</b>.</p>
+                <p class="hint">Raktas slaptas – kas jį turi, gali prisijungti kaip šis taškas.</p>
                 <details open>
                     <summary><b>Windows</b></summary>
                     <p class="hint">Start mygtukas → įrašykite <b>PowerShell</b> → atidarykite → įklijuokite ir Enter:</p>
