@@ -245,7 +245,7 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .bt-row { font-size: .88rem; padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
 .bt-row.ok { color: var(--ok); font-weight: 600; }
 .agents { list-style: none; padding: 0; margin: 0 0 14px; }
-.agents li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+.agents li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
 .agents .ag-order { color: var(--muted); font-weight: 700; width: 1.4em; }
 .agents .ag-info { flex: 1; min-width: 0; }
 .agents .ag-info b { display: block; }
@@ -306,6 +306,6 @@ input.search { margin: 0 0 10px; background: var(--card); }
 .ag-ver.old{background:rgba(220,70,70,.15);color:#d33}
 
 /* Agento žurnalas (centralizuotas) */
-.ag-log{margin-top:6px}
+.ag-log{flex-basis:100%;margin:2px 0 0 calc(1.4em + 26px)}
 .ag-log summary{cursor:pointer;font-size:.8rem;color:var(--muted)}
 .ag-log pre{margin:6px 0 0;padding:10px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font-size:.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto}

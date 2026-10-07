@@ -49,24 +49,48 @@ function Kill-Tree($proc) {
     # Nuzudo VISA narsykles procesu medi (Chrome paleidzia daug vaikiniu procesu).
     if ($proc -and -not $proc.HasExited) {
         try { & taskkill /F /T /PID $proc.Id 2>$null | Out-Null } catch {}
-        try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
+        try { if (-not $proc.HasExited) { $proc.Kill($true) } } catch { try { $proc.Kill() } catch {} }
     }
 }
 
-function Count-BrowserProcs {
+function Get-OwnBrowserPids {
+    # Tik sio agento paleisti narsykles procesai (pagal laikino profilio zyme wwagent-/wwshot-).
+    # Jusu paciu narsykles langai NIEKADA neliečiami.
     try {
-        $n = "chrome"
-        if ($script:BrowserExe -match "msedge") { $n = "msedge" }
-        elseif ($script:BrowserExe -match "brave") { $n = "brave" }
-        return @(Get-Process -Name $n -ErrorAction SilentlyContinue).Count
-    } catch { return -1 }
+        # Tik senesni nei 60 s: veikiancio darbo narsykle visada nuzudoma po 35 s, tad senesnis
+        # procesas garantuotai yra „naslaitis" (net jei kompiuteryje veiktu du agentai).
+        $limit = (Get-Date).AddSeconds(-60)
+        $found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.CommandLine -match 'ww(agent|shot)-' -and $_.ProcessId -ne $PID -and $_.Name -notmatch '^(powershell|pwsh|python)' -and
+            (-not $_.CreationDate -or $_.CreationDate -lt $limit)
+        } | ForEach-Object { [int]$_.ProcessId })
+        return ,$found   # kablelis: kad tuscias masyvas nevirstu $null
+    } catch { return $null }
+}
+
+function Clear-OwnBrowsers {
+    # Kvieciama TARP darbu: tuo metu agento narsykle neturi veikti, tad rasti procesai - pakibe likuciai.
+    $ids = Get-OwnBrowserPids
+    if ($null -eq $ids) { return -1 }
+    foreach ($id in $ids) {
+        try { & taskkill /F /T /PID $id 2>$null | Out-Null } catch {}
+        try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    if ($ids.Count -gt 0) { Log "Isvalyta pakibusiu narsykles procesu: $($ids.Count)" }
+    # Seni laikini profiliai (jei Chrome dar laike failus ir jie nebuvo istrinti)
+    try {
+        Get-ChildItem -Path $env:TEMP -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^ww(agent|shot)-' -and $_.LastWriteTime -lt (Get-Date).AddMinutes(-5) } |
+            ForEach-Object { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction SilentlyContinue }
+    } catch {}
+    return $ids.Count
 }
 
 function Send-Diag {
     try {
-        $procs = Count-BrowserProcs
+        $procs = Clear-OwnBrowsers
         $exe = if ($script:BrowserExe -and $script:BrowserExe -ne "?") { Split-Path $script:BrowserExe -Leaf } else { "nerasta" }
-        $text = "narsykle: $exe - narsykles procesu: $procs`n" + ($script:Recent -join "`n")
+        $text = "narsykle: $exe - pakibusiu narsykles procesu rasta ir isvalyta: $procs`n" + ($script:Recent -join "`n")
         $bytes = [Text.Encoding]::UTF8.GetBytes($text)
         $ms = New-Object IO.MemoryStream
         $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Compress)
@@ -211,7 +235,10 @@ function Invoke-BrowserScreenshot($url, $ua) {
     }
 }
 
-Log "WebWatch tikrinimo taskas '$Name' paleistas. Serveris: $Server"
+Log "WebWatch tikrinimo taskas '$Name' (v$Version) paleistas. Serveris: $Server"
+$script:BrowserExe = Find-Browser
+if ($script:BrowserExe) { Log "Rasta narsykle: $($script:BrowserExe)" }
+else { Log "Narsykle nerasta - sudetingoms svetainems ir ekrano nuotraukoms idiekite Chrome arba Edge." }
 Write-Host "Palikite si langa atidaryta (arba naudokite -Install automatiniam paleidimui)."
 
 $backoff = 2

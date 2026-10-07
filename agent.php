@@ -41,20 +41,36 @@ if ($action === 'script') {
         $dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
         $server = ($https ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . $dir . '/';
     }
+    // Pavadinimas agento programoje naudojamas HTTP antraštėje ir žurnale, o HTTP antraštės
+    // leidžia tik ASCII – todėl be diakritikų („Pas tetą" -> „Pas teta"). Serveris kompiuterį
+    // atpažįsta pagal raktą, ne pavadinimą, tad tai nieko nekeičia.
+    $asciiName = strtr((string)$agent['name'], [
+        'ą' => 'a', 'č' => 'c', 'ę' => 'e', 'ė' => 'e', 'į' => 'i', 'š' => 's', 'ų' => 'u', 'ū' => 'u', 'ž' => 'z',
+        'Ą' => 'A', 'Č' => 'C', 'Ę' => 'E', 'Ė' => 'E', 'Į' => 'I', 'Š' => 'S', 'Ų' => 'U', 'Ū' => 'U', 'Ž' => 'Z',
+    ]);
+    $tr = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $asciiName);
+    $asciiName = trim(preg_replace('/[^A-Za-z0-9 ._-]/', '', $tr !== false ? $tr : $asciiName)) ?: 'Taskas';
     $script = str_replace(
         ['__WW_SERVER__', '__WW_TOKEN__', '__WW_NAME__'],
-        [$server, $agent['token'], preg_replace('/[^\w .-]/u', '', (string)$agent['name'])],
+        [$server, $agent['token'], $asciiName],
         (string)file_get_contents($file)
     );
     header('Content-Type: text/plain; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . ($os === 'win' ? 'ww-agent.ps1' : 'ww-agent.py') . '"');
-    echo $script;
+    // Windows PowerShell 5.1 be BOM skaito failą kaip ANSI – su BOM teisingai perskaito UTF-8
+    echo ($os === 'win' ? "\xEF\xBB\xBF" : '') . $script;
     exit;
 }
 
 $db = db();
 $touch = function () use ($agent) {
     $info = mb_substr(trim((string)($_GET['os'] ?? '') . ' ' . (string)($_GET['v'] ?? '') . ' ' . (string)($_GET['browser'] ?? '')), 0, 120);
+    if ($info === '') {
+        // Užklausa be versijos duomenų (pvz. diag) – neperrašom žinomos versijos tuščia reikšme
+        db_write('UPDATE agents SET last_seen = ?, last_ip = ? WHERE id = ?',
+            [time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $agent['id']]);
+        return;
+    }
     db_write('UPDATE agents SET last_seen = ?, last_ip = ?, info = ? WHERE id = ?',
         [time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $info, $agent['id']]);
 };

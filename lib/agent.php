@@ -116,6 +116,7 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
     $lastBlocked = null;
     $lastFail = null;
     $anyTried = false;
+    $slowTries = 0;
     foreach ($agents as $agent) {
         if (!agent_is_online($agent)) {
             continue; // atsijungusį praleidžiame
@@ -132,6 +133,12 @@ function agent_fetch(string $url, array $headers, string $ua, bool $render = fal
             // tiek pat laiko, o taip po vieną užstringa visi. Sustojam ir grąžinam klaidą.
             if (($r['stage'] ?? '') === 'no_result') {
                 ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – nebesiunčiama kitiems (puslapis per lėtas visiems)');
+                break;
+            }
+            // Naršyklė nespėjo per savo limitą (sunkus puslapis). Bandom DAR TIK vieną vietą
+            // (gal ten greitesnis internetas), bet ne visas – kitaip po 35 s užimtų kiekvieną kompiuterį.
+            if (preg_match('/nar[sš]ykl[eė] neatsak/iu', (string)$r['error']) && ++$slowTries >= 2) {
+                ww_log('info', 'Tikrinimo taškas „' . $agent['name'] . '“: ' . $r['error'] . ' – nebesiunčiama kitiems (puslapis per sunkus dviem vietoms)');
                 break;
             }
             // Kompiuteris darbo nepaėmė (atsijungęs/sena versija) – bandom kitą.
@@ -196,7 +203,7 @@ function agent_dispatch(PDO $db, int $agentId, string $url, array $headers, stri
         if ($status !== 'claimed' && !$claimed && $waited > WW_AGENT_CLAIM_TIMEOUT) {
             // Kompiuteris prisijungęs (skambina), bet nepaėmė jam skirto darbo –
             // beveik visada sena agento versija arba jis nevykdo naujų užduočių.
-            $res['error'] = 'nepaėmė darbo (sena agento versija? atnaujinkite ją tame kompiuteryje)';
+            $res['error'] = 'nepaėmė darbo per ' . WW_AGENT_CLAIM_TIMEOUT . ' s (užimtas kitu tikrinimu arba ką tik atsijungė)';
             $res['stage'] = 'not_claimed';
             $res['node_failed'] = true;
             break;

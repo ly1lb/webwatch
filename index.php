@@ -1140,10 +1140,9 @@ function view_settings(?array $flash): void
             (tikras atspaudas ir JavaScript), o būtent to apsaugos ir tikrina.</p>
         <p class="hint">ℹ️ <b>Norint prijungti kompiuterį iš naujo</b> (pvz. atnaujinus programą) – <b>netrinkite</b> taško, o spauskite
             <b>„Įdiegti“</b> ir paleiskite komandą tame kompiuteryje. Trynimas pakeičia raktą, todėl senoji programa nustoja veikti.</p>
-        <p class="hint">🩺 Jei rodo „neatsakė laiku“, priežastį matysite tame kompiuteryje: agento žurnale
-            <code>~/.wwagent/agent.log</code> (Mac/Linux) arba <code>%APPDATA%\WWAgent\agent.log</code> (Windows).
-            Dažniausia priežastis – sena agento versija (atnaujinkite) arba hostingo apsauga (WAF), atmetanti rezultato siuntimą –
-            nuo šios versijos turinys siunčiamas suspaustas, kad to išvengtų.</p>
+        <p class="hint">🩺 Kiekvienas kompiuteris (nuo v7) kas minutę atsiunčia savo žurnalą – jį matysite žemiau prie taško,
+            paspaudę <b>„Žurnalas“</b>: ką tikrino, kiek truko, kokia klaida. Tas pats žurnalas yra ir pačiame kompiuteryje:
+            <code>~/.wwagent/agent.log</code> (Mac/Linux) arba <code>%APPDATA%\WWAgent\agent.log</code> (Windows).</p>
         <?php
         $agents = agents_all();
         $newId = (int)($_GET['agent'] ?? 0);
@@ -1169,14 +1168,8 @@ function view_settings(?array $flash): void
                                 <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
                             </small>
                             <?php if ($on && $av > 0 && $av < 5): ?><small class="err-text">⚠️ Sena versija – ekrano nuotraukos neveiks. Spauskite „Įdiegti" ir paleiskite komandą iš naujo. Jei nepasikeičia – uždarykite seną agento langą arba sustabdykite seną procesą.</small><?php endif; ?>
-                            <?php $procs = (int)($a['procs'] ?? -1); if ($procs > 25): ?><small class="err-text">⚠️ Daug naršyklės procesų kompiuteryje (<?= $procs ?>) – greičiausiai kaupiasi „pakibę" Chrome langai. Perkraukite kompiuterį arba agentą (nuo v7 tai tvarkoma automatiškai).</small><?php endif; ?>
+                            <?php $procs = (int)($a['procs'] ?? -1); if ($procs > 0): ?><small class="muted">🧹 Paskutinį kartą rasta ir automatiškai išvalyta pakibusių naršyklės procesų: <?= $procs ?></small><?php endif; ?>
                             <?php if ($a['last_error']): ?><small class="err-text">⚠️ <?= h($a['last_error']) ?></small><?php endif; ?>
-                            <?php if (!empty($a['diag'])): ?>
-                                <details class="ag-log">
-                                    <summary>Žurnalas<?= $procs >= 0 ? ' · naršyklės procesų: ' . $procs : '' ?><?= !empty($a['diag_at']) ? ' · ' . h(human_time((int)$a['diag_at'])) : '' ?></summary>
-                                    <pre><?= h($a['diag']) ?></pre>
-                                </details>
-                            <?php endif; ?>
                         </div>
                         <span class="ag-btns">
                             <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>
@@ -1184,6 +1177,12 @@ function view_settings(?array $flash): void
                             <a class="btn small" href="?view=settings&agent=<?= $a['id'] ?>#agents">Įdiegti</a>
                             <form method="post" onsubmit="return confirm('Ištrinti šį tašką visam laikui? Norėdami tik prijungti kompiuterį iš naujo, spauskite „Įdiegti“, o ne šį mygtuką.')"><?= csrf_field() ?><input type="hidden" name="do" value="delete_agent"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button class="btn small ghost" title="Ištrinti visam laikui">🗑</button></form>
                         </span>
+                        <?php if (!empty($a['diag'])): ?>
+                            <details class="ag-log">
+                                <summary>Žurnalas<?= !empty($a['diag_at']) ? ' · ' . h(human_time((int)$a['diag_at'])) : '' ?></summary>
+                                <pre><?= h($a['diag']) ?></pre>
+                            </details>
+                        <?php endif; ?>
                     </li>
                 <?php endforeach; ?>
             </ul>

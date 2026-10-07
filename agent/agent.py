@@ -45,6 +45,8 @@ BROWSER_TIMEOUT = 35              # KIETAS naršyklės proceso limitas (s). Svar
                                   # užstringa ir blokuoja kitus darbus. Po timeout'o NEBANDOMA
                                   # antrą kartą – tai tik vėl užtruktų tiek pat.
 
+ORPHAN_AGE = 60                   # agento naršyklės procesai, senesni nei tiek s – „našlaičiai"
+
 # Bendri naršyklės parametrai. Svarbiausia – IŠJUNGTI ryšius su Google (atnaujinimai,
 # safebrowsing, telemetrija): ribotame/lėtame tinkle jie „kabo" ir sukelia timeout'us.
 CHROME_FLAGS = [
@@ -153,6 +155,12 @@ def _run_browser(args):
         raise
     try:
         out, _ = p.communicate(timeout=BROWSER_TIMEOUT)
+        if os.name != "nt":
+            # Pagrindinis procesas baigėsi – „iššluojam" grupę, jei liko vaikinių procesų
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except Exception:  # noqa
+                pass
         return out, False
     except subprocess.TimeoutExpired:
         _kill_tree(p)
@@ -361,29 +369,64 @@ def log(msg):
         pass
 
 
-def count_browser_procs():
-    """Kiek šiuo metu veikia naršyklės procesų (orphan'ų aptikimui)."""
-    exe = (BROWSER_PATH or "").lower()
-    name = "chrome"
-    if "msedge" in exe or "edge" in exe:
-        name = "msedge"
-    elif "brave" in exe:
-        name = "brave"
-    elif "chromium" in exe:
-        name = "chromium"
+def own_browser_pids():
+    """PID'ai naršyklės procesų, kuriuos paleido ŠIS agentas – atpažįstami pagal jo
+    laikino profilio žymę (wwagent-/wwshot-) komandinėje eilutėje. Jūsų pačių
+    naršyklės langai NIEKADA neįtraukiami. None – nepavyko patikrinti."""
+    # Tik SENESNI nei ORPHAN_AGE s: veikiančio darbo naršyklė visada nužudoma po BROWSER_TIMEOUT,
+    # tad senesnis procesas garantuotai yra „našlaitis" (net jei kompiuteryje veiktų du agentai).
     try:
         if os.name == "nt":
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq %s.exe" % name],
-                                 capture_output=True, timeout=8).stdout.decode("utf-8", "replace")
-            return out.lower().count(name + ".exe")
-        # „[c]hrome" gudrybė: pgrep neskaičiuoja savęs paties (jo argumente yra „[c]hrome",
-        # kuris kaip regex neatitinka to paties teksto su skliaustais).
-        pat = "[%s]%s" % (name[0], name[1:])
-        out = subprocess.run(["pgrep", "-c", "-f", pat],
-                             capture_output=True, timeout=8).stdout.decode().strip()
-        return int(out or "0")
+            ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'ww(agent|shot)-' "
+                  "-and $_.Name -notmatch '^(powershell|pwsh|python)' "
+                  "-and $_.CreationDate -lt (Get-Date).AddSeconds(-%d) } | ForEach-Object { $_.ProcessId }" % ORPHAN_AGE)
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                                 capture_output=True, timeout=25).stdout.decode("utf-8", "replace")
+            return [int(x) for x in out.split() if x.strip().isdigit()]
+        # „[w]w" gudrybė: pgrep neranda savęs paties (jo argumentas su skliaustais neatitinka)
+        out = subprocess.run(["pgrep", "-f", "[w]w(agent|shot)-"],
+                             capture_output=True, timeout=8).stdout.decode()
+        pids = [int(x) for x in out.split() if x.strip().isdigit() and int(x) != os.getpid()]
+        return [p for p in pids if _proc_age(p) > ORPHAN_AGE]
     except Exception:  # noqa
+        return None
+
+
+def _proc_age(pid):
+    """Kiek sekundžių veikia procesas (Linux – /proc, Mac – ps). Nežinant – laikom senu."""
+    try:
+        if os.path.isdir("/proc/%d" % pid):
+            return time.time() - os.stat("/proc/%d" % pid).st_ctime
+        et = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                            capture_output=True, timeout=5).stdout.decode().strip()  # [[dd-]hh:]mm:ss
+        days, _, rest = et.rpartition("-")
+        secs = 0
+        for part in rest.split(":"):
+            secs = secs * 60 + int(part)
+        return secs + (int(days) * 86400 if days else 0)
+    except Exception:  # noqa
+        return 10 ** 9
+
+
+def clear_own_browsers():
+    """Kviečiama TARP darbų: tuo metu agento naršyklė neturi veikti, tad visi rasti jos
+    procesai – pakibę likučiai. Nužudom juos. Grąžina kiek rasta (-1 – nežinoma)."""
+    pids = own_browser_pids()
+    if pids is None:
         return -1
+    for pid in pids:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=10)
+            elif os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGKILL)  # grupės vadovas (mūsų paleista naršyklė) – visa grupė iškart
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except Exception:  # noqa
+            pass
+    if pids:
+        log("Išvalyta pakibusių naršyklės procesų: %d" % len(pids))
+    return len(pids)
 
 
 def send_diag():
@@ -391,9 +434,9 @@ def send_diag():
     Taip viską matote tiesiog WebWatch'e, be jokio SSH ar failų kompiuteryje."""
     import base64
     try:
-        procs = count_browser_procs()
-        head = "naršyklė: %s · naršyklės procesų: %s" % (
-            os.path.basename(BROWSER_PATH) if BROWSER_PATH and BROWSER_PATH != "?" else "nerasta",
+        procs = clear_own_browsers()
+        head = "naršyklė: %s · pakibusių naršyklės procesų rasta ir išvalyta: %s" % (
+            os.path.basename(BROWSER_PATH) if BROWSER_PATH else "nerasta",
             procs if procs >= 0 else "?")
         text = head + "\n" + "\n".join(RECENT[-30:])
         payload = base64.b64encode(gzip.compress(text.encode("utf-8")))
