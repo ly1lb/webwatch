@@ -101,7 +101,21 @@ function Send-Diag {
     } catch {}
 }
 
+function Stop-OldAgents {
+    # Sustabdo VISUS siame kompiuteryje veikiancius agentus (senas versijas, paslėptus ir atidarytus
+    # langus) bei ju paliktus Chrome procesus. Jusu paciu narsykles nelieciamos.
+    schtasks /End /TN "WebWatchAgent" 2>$null | Out-Null
+    try {
+        $old = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ProcessId -ne $PID -and $_.CommandLine -match 'WWAgent|ww-agent|ww(agent|shot)-'
+        })
+        foreach ($p in $old) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        if ($old.Count) { Write-Host "Sustabdyti seni agento procesai: $($old.Count)" }
+    } catch {}
+}
+
 function Install-Agent {
+    Stop-OldAgents
     $dstDir = Join-Path $env:APPDATA "WWAgent"
     New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
     $dst = Join-Path $dstDir "ww-agent.ps1"
@@ -115,7 +129,7 @@ function Install-Agent {
 }
 
 function Uninstall-Agent {
-    schtasks /End /TN "WebWatchAgent" 2>$null | Out-Null
+    Stop-OldAgents
     schtasks /Delete /TN "WebWatchAgent" /F 2>$null | Out-Null
     Write-Host "Pasalinta."
     exit 0

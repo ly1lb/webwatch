@@ -520,7 +520,30 @@ def self_path():
     return dst
 
 
+def stop_old_agents():
+    """Sustabdo kitus šiame kompiuteryje veikiančius agentus (senas versijas) – kitaip
+    senas toliau „pasiima" darbus ir naujas atrodo neveikiantis."""
+    if os.name == "nt":
+        return
+    try:
+        out = subprocess.run(["pgrep", "-f", "[w]w-agent\\.py"], capture_output=True, timeout=8).stdout.decode()
+        me = {os.getpid(), os.getppid()}
+        n = 0
+        for x in out.split():
+            if x.isdigit() and int(x) not in me:
+                try:
+                    os.kill(int(x), signal.SIGKILL)
+                    n += 1
+                except Exception:  # noqa
+                    pass
+        if n:
+            print("Sustabdyti seni agento procesai: %d" % n)
+    except Exception:  # noqa
+        pass
+
+
 def install():
+    stop_old_agents()
     dst = self_path()
     system = platform.system()
     py = sys.executable or "python3"
@@ -539,7 +562,8 @@ def install():
   <key>StandardOutPath</key><string>%s/.wwagent/agent.log</string>
 </dict></plist>""" % (label, py, dst, os.path.expanduser("~"), os.path.expanduser("~")))
         os.system("launchctl unload '%s' 2>/dev/null; launchctl load '%s'" % (plist, plist))
-        print("Įdiegta. Tikrinimo taškas veiks ir po perkrovimo (launchd).")
+        print("Įdiegta ir paleista fone (launchd). Veiks ir po perkrovimo. Šį langą galite uždaryti.")
+        return  # launchd jau paleido – antro egzemplioriaus nebereikia
     elif system == "Linux":
         unit_dir = os.path.expanduser("~/.config/systemd/user")
         os.makedirs(unit_dir, exist_ok=True)
@@ -555,9 +579,11 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 """ % (py, dst))
-        if os.system("systemctl --user daemon-reload && systemctl --user enable --now wwagent.service") == 0:
+        if os.system("systemctl --user daemon-reload && systemctl --user enable wwagent.service"
+                     " && systemctl --user restart wwagent.service") == 0:
             os.system("loginctl enable-linger $USER 2>/dev/null")
-            print("Įdiegta (systemd --user). Tikrinimo taškas veiks ir po perkrovimo.")
+            print("Įdiegta ir paleista fone (systemd --user). Veiks ir po perkrovimo. Šį langą galite uždaryti.")
+            return  # systemd jau paleido – antro egzemplioriaus nebereikia
         else:
             print("systemd nerastas. Pridėkite į autostart rankiniu būdu: %s %s" % (py, dst))
     else:
@@ -578,6 +604,7 @@ WantedBy=default.target
 
 def uninstall():
     system = platform.system()
+    stop_old_agents()
     if system == "Darwin":
         plist = os.path.expanduser("~/Library/LaunchAgents/com.webwatch.agent.plist")
         os.system("launchctl unload '%s' 2>/dev/null" % plist)
