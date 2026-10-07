@@ -21,7 +21,9 @@ import re
 import ssl
 import sys
 import time
+import glob
 import zlib
+import signal
 import shutil
 import socket
 import tempfile
@@ -33,7 +35,7 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "6"
+VERSION = "7"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 30                # greitam (be JS) parsiuntimui
@@ -42,6 +44,20 @@ BROWSER_TIMEOUT = 35              # KIETAS naršyklės proceso limitas (s). Svar
                                   # privalo baigti greičiau nei serveris laukia (110 s), kitaip
                                   # užstringa ir blokuoja kitus darbus. Po timeout'o NEBANDOMA
                                   # antrą kartą – tai tik vėl užtruktų tiek pat.
+
+# Bendri naršyklės parametrai. Svarbiausia – IŠJUNGTI ryšius su Google (atnaujinimai,
+# safebrowsing, telemetrija): ribotame/lėtame tinkle jie „kabo" ir sukelia timeout'us.
+CHROME_FLAGS = [
+    "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    "--disable-extensions", "--mute-audio", "--no-sandbox", "--disable-dev-shm-usage",
+    "--hide-scrollbars", "--disable-background-networking", "--disable-component-update",
+    "--disable-default-apps", "--disable-sync", "--disable-translate", "--no-pings",
+    "--metrics-recording-only", "--disable-crash-reporter", "--disable-breakpad",
+    "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
+    "--disable-background-timer-throttling", "--disable-client-side-phishing-detection",
+    "--disable-features=Translate,BackForwardCache,InterestCohort,OptimizationHints",
+    "--password-store=basic", "--use-mock-keychain",
+]
 BROWSER_HEADERS = {
     "mobile": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
               "(KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
@@ -106,14 +122,57 @@ def browser_path():
     return BROWSER_PATH
 
 
-def _run_browser(args):
-    """Paleidžia naršyklę su KIETU laiko limitu. Grąžina (stdout, timed_out).
-    Po timeout'o procesas nužudomas, kad agentas neliktų įstrigęs."""
+def _kill_tree(p):
+    """Nužudo VISĄ naršyklės procesų medį (Chrome paleidžia daug vaikinių procesų –
+    jei nužudytume tik tėvinį, vaikiniai liktų kaboti ir kauptųsi, kol kompiuteris
+    nebepajėgtų paleisti naujos naršyklės – tada atrodo, kad „agentas išsijungė")."""
     try:
-        r = subprocess.run(args, capture_output=True, timeout=BROWSER_TIMEOUT)
-        return r.stdout, False
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                           capture_output=True)
+        else:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+    except Exception:  # noqa
+        try:
+            p.kill()
+        except Exception:  # noqa
+            pass
+
+
+def _run_browser(args):
+    """Paleidžia naršyklę atskirame procesų grupėje su KIETU laiko limitu.
+    Grąžina (stdout, timed_out). Po timeout'o nužudomas visas medis."""
+    kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True     # sava procesų grupė -> killpg
+    try:
+        p = subprocess.Popen(args, **kwargs)
+    except Exception as e:  # noqa
+        raise
+    try:
+        out, _ = p.communicate(timeout=BROWSER_TIMEOUT)
+        return out, False
     except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=5)
+        except Exception:  # noqa
+            pass
         return b"", True
+
+
+def cleanup_stale_profiles():
+    """Pašalina senus laikinus naršyklės profilius, likusius po nutrauktų bandymų."""
+    now = time.time()
+    for pat in ("wwagent-*", "wwshot-*"):
+        for d in glob.glob(os.path.join(tempfile.gettempdir(), pat)):
+            try:
+                if now - os.path.getmtime(d) > 300:  # senesni nei 5 min
+                    shutil.rmtree(d, ignore_errors=True)
+            except Exception:  # noqa
+                pass
 
 
 def browser_fetch(url, ua):
@@ -123,10 +182,8 @@ def browser_fetch(url, ua):
         return None
     profile = tempfile.mkdtemp(prefix="wwagent-")
     try:
-        args = [
-            exe, "--headless=new", "--disable-gpu", "--no-first-run",
-            "--no-default-browser-check", "--disable-extensions", "--mute-audio",
-            "--no-sandbox", "--disable-dev-shm-usage", "--hide-scrollbars",
+        args = [exe] + CHROME_FLAGS + [
+            "--blink-settings=imagesEnabled=false",  # tekstui paveikslėlių nereikia – greičiau
             "--user-data-dir=" + profile, "--user-agent=" + ua,
             "--virtual-time-budget=%d" % BROWSER_WAIT_MS, "--dump-dom", url,
         ]
@@ -156,10 +213,7 @@ def browser_screenshot(url, ua):
     profile = tempfile.mkdtemp(prefix="wwshot-")
     out_png = os.path.join(profile, "shot.png")
     try:
-        args = [
-            exe, "--headless=new", "--disable-gpu", "--no-first-run",
-            "--no-default-browser-check", "--disable-extensions", "--mute-audio",
-            "--no-sandbox", "--disable-dev-shm-usage", "--hide-scrollbars",
+        args = [exe] + CHROME_FLAGS + [
             "--force-device-scale-factor=1", "--window-size=1280,2000",
             "--user-data-dir=" + profile, "--user-agent=" + ua,
             "--virtual-time-budget=%d" % BROWSER_WAIT_MS,
@@ -288,11 +342,14 @@ def send_result(job_id, status, body, final_url, ctype, error):
 
 
 LOG_PATH = os.path.join(os.path.expanduser("~"), ".wwagent", "agent.log")
+RECENT = []  # paskutinės žurnalo eilutės – siunčiamos serveriui (matomos WebWatch'e)
 
 
 def log(msg):
     line = time.strftime("%Y-%m-%d %H:%M:%S ") + msg
     print(line, flush=True)
+    RECENT.append(line)
+    del RECENT[:-40]  # laikome tik paskutines 40
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -304,14 +361,66 @@ def log(msg):
         pass
 
 
+def count_browser_procs():
+    """Kiek šiuo metu veikia naršyklės procesų (orphan'ų aptikimui)."""
+    exe = (BROWSER_PATH or "").lower()
+    name = "chrome"
+    if "msedge" in exe or "edge" in exe:
+        name = "msedge"
+    elif "brave" in exe:
+        name = "brave"
+    elif "chromium" in exe:
+        name = "chromium"
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq %s.exe" % name],
+                                 capture_output=True, timeout=8).stdout.decode("utf-8", "replace")
+            return out.lower().count(name + ".exe")
+        # „[c]hrome" gudrybė: pgrep neskaičiuoja savęs paties (jo argumente yra „[c]hrome",
+        # kuris kaip regex neatitinka to paties teksto su skliaustais).
+        pat = "[%s]%s" % (name[0], name[1:])
+        out = subprocess.run(["pgrep", "-c", "-f", pat],
+                             capture_output=True, timeout=8).stdout.decode().strip()
+        return int(out or "0")
+    except Exception:  # noqa
+        return -1
+
+
+def send_diag():
+    """Nusiunčia serveriui paskutines žurnalo eilutes + naršyklės procesų skaičių.
+    Taip viską matote tiesiog WebWatch'e, be jokio SSH ar failų kompiuteryje."""
+    import base64
+    try:
+        procs = count_browser_procs()
+        head = "naršyklė: %s · naršyklės procesų: %s" % (
+            os.path.basename(BROWSER_PATH) if BROWSER_PATH and BROWSER_PATH != "?" else "nerasta",
+            procs if procs >= 0 else "?")
+        text = head + "\n" + "\n".join(RECENT[-30:])
+        payload = base64.b64encode(gzip.compress(text.encode("utf-8")))
+        api("diag", data=payload, headers={
+            "X-Body-Encoding": "gzip+base64", "Content-Type": "text/plain",
+            "X-Procs": str(procs),
+        }, timeout=20).read()
+    except Exception:  # noqa
+        pass
+
+
 def run():
     browser = platform.system() + " " + platform.release()
     log("WebWatch tikrinimo taškas „%s“ (v%s) paleistas. Serveris: %s" % (NAME, VERSION, SERVER))
     log("Žurnalas: %s" % LOG_PATH)
     browser_path()  # iš karto pranešam, ar rasta naršyklė
+    cleanup_stale_profiles()
     idle_backoff = 2
+    last_diag = 0
+    send_diag()  # iškart pranešam būseną serveriui
     while True:
         try:
+            # Periodiškai (kas ~60 s) nusiunčiam būseną serveriui, kad ją matytumėt WebWatch'e
+            if time.time() - last_diag > 60:
+                send_diag()
+                cleanup_stale_profiles()
+                last_diag = time.time()
             params = "&wait=%d&os=%s&v=%s&browser=%s" % (
                 POLL_WAIT, platform.system().lower(), VERSION,
                 urllib.parse.quote(browser[:40]))
@@ -334,6 +443,8 @@ def run():
             t2 = time.time()
             log("  grąžinta serveriui: HTTP %s, %d baitų (parsiuntė %.1fs, išsiuntė %.1fs)%s"
                 % (status, len(body or b""), t1 - t0, t2 - t1, ", klaida: " + error if error else ""))
+            send_diag()  # po kiekvieno darbo – šviežia būsena serveryje
+            last_diag = time.time()
             idle_backoff = 2
         except urllib.error.HTTPError as e:
             if e.code == 403:

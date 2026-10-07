@@ -59,6 +59,22 @@ $touch = function () use ($agent) {
         [time(), (string)($_SERVER['REMOTE_ADDR'] ?? ''), $info, $agent['id']]);
 };
 
+if ($action === 'diag') {
+    // Kompiuteris atsiunčia savo paskutines žurnalo eilutes – kad jas matytumėt WebWatch'e.
+    $touch();
+    $raw = (string)file_get_contents('php://input', false, null, 0, 256 * 1024);
+    if (($_SERVER['HTTP_X_BODY_ENCODING'] ?? '') === 'gzip+base64') {
+        $dec = base64_decode($raw, true);
+        $un = $dec !== false ? @gzdecode($dec) : false;
+        $raw = $un !== false ? $un : (string)$dec;
+    }
+    $raw = mb_substr($raw, 0, 8000);
+    $procs = (int)($_SERVER['HTTP_X_PROCS'] ?? -1);
+    db_write('UPDATE agents SET diag = ?, procs = ?, diag_at = ? WHERE id = ?',
+        [$raw, $procs, time(), $agent['id']]);
+    agent_out(['ok' => true]);
+}
+
 if ($action === 'poll') {
     ignore_user_abort(false);
     $wait = max(0, min(25, (int)($_GET['wait'] ?? 25)));

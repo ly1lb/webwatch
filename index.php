@@ -1169,7 +1169,14 @@ function view_settings(?array $flash): void
                                 <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
                             </small>
                             <?php if ($on && $av > 0 && $av < 5): ?><small class="err-text">⚠️ Sena versija – ekrano nuotraukos neveiks. Spauskite „Įdiegti" ir paleiskite komandą iš naujo. Jei nepasikeičia – uždarykite seną agento langą arba sustabdykite seną procesą.</small><?php endif; ?>
+                            <?php $procs = (int)($a['procs'] ?? -1); if ($procs > 25): ?><small class="err-text">⚠️ Daug naršyklės procesų kompiuteryje (<?= $procs ?>) – greičiausiai kaupiasi „pakibę" Chrome langai. Perkraukite kompiuterį arba agentą (nuo v7 tai tvarkoma automatiškai).</small><?php endif; ?>
                             <?php if ($a['last_error']): ?><small class="err-text">⚠️ <?= h($a['last_error']) ?></small><?php endif; ?>
+                            <?php if (!empty($a['diag'])): ?>
+                                <details class="ag-log">
+                                    <summary>Žurnalas<?= $procs >= 0 ? ' · naršyklės procesų: ' . $procs : '' ?><?= !empty($a['diag_at']) ? ' · ' . h(human_time((int)$a['diag_at'])) : '' ?></summary>
+                                    <pre><?= h($a['diag']) ?></pre>
+                                </details>
+                            <?php endif; ?>
                         </div>
                         <span class="ag-btns">
                             <?php if ($i > 0): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="agent_priority"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="dir" value="up"><button class="btn small ghost" title="Aukštyn">↑</button></form><?php endif; ?>
