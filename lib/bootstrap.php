@@ -7,10 +7,109 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.9.0');
+define('WW_VERSION', '1.10.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
+}
+ww_load_db_env();
+
+/**
+ * MySQL nustatymai gali būti ne tik config.php, bet ir .env faile ar serverio aplinkos
+ * kintamuosiuose. Palaikomi įprasti pavadinimai: DB_HOST, DB_DATABASE / DB_NAME,
+ * DB_USERNAME / DB_USER, DB_PASSWORD / DB_PASS, DB_PORT (taip pat WW_DB_* ir MYSQL_*).
+ * .env ieškoma programos kataloge ir vienu lygiu aukščiau (saugiau – ne viešame kataloge).
+ * Pirmenybė: config.php → aplinkos kintamieji → .env.
+ */
+function ww_load_db_env(): void
+{
+    if (defined('WW_DB_HOST')) {
+        define('WW_DB_SOURCE', 'config.php');
+        return;
+    }
+    $names = [
+        'WW_DB_HOST' => ['WW_DB_HOST', 'DB_HOST', 'MYSQL_HOST'],
+        'WW_DB_NAME' => ['WW_DB_NAME', 'DB_DATABASE', 'DB_NAME', 'MYSQL_DATABASE'],
+        'WW_DB_USER' => ['WW_DB_USER', 'DB_USERNAME', 'DB_USER', 'MYSQL_USER'],
+        'WW_DB_PASS' => ['WW_DB_PASS', 'DB_PASSWORD', 'DB_PASS', 'MYSQL_PASSWORD'],
+        'WW_DB_PORT' => ['WW_DB_PORT', 'DB_PORT', 'MYSQL_PORT'],
+    ];
+    $pick = function (array $src) use ($names): array {
+        $out = [];
+        foreach ($names as $const => $keys) {
+            foreach ($keys as $k) {
+                if (isset($src[$k]) && trim((string)$src[$k]) !== '') {
+                    $out[$const] = trim((string)$src[$k]);
+                    break;
+                }
+            }
+        }
+        // DB_CONNECTION=sqlite (Laravel stilius) – reiškia, kad MySQL nenorima
+        $conn = strtolower(trim((string)($src['DB_CONNECTION'] ?? '')));
+        if ($conn !== '' && !in_array($conn, ['mysql', 'mariadb'], true)) {
+            return [];
+        }
+        return $out;
+    };
+    // 1) Serverio aplinkos kintamieji
+    $env = [];
+    foreach (array_merge(...array_values($names)) as $k) {
+        $v = getenv($k);
+        if ($v === false) {
+            $v = $_SERVER[$k] ?? ($_ENV[$k] ?? false);
+        }
+        if ($v !== false) {
+            $env[$k] = $v;
+        }
+    }
+    $env['DB_CONNECTION'] = getenv('DB_CONNECTION') ?: ($_SERVER['DB_CONNECTION'] ?? '');
+    $cfg = $pick($env);
+    $source = 'aplinkos kintamieji';
+    // 2) .env failas
+    if (empty($cfg['WW_DB_HOST'])) {
+        foreach ([WW_ROOT . '/.env', dirname(WW_ROOT) . '/.env'] as $file) {
+            if (is_file($file) && is_readable($file)) {
+                $cfg = $pick(ww_parse_env_file($file));
+                $source = '.env (' . $file . ')';
+                if (!empty($cfg['WW_DB_HOST'])) {
+                    break;
+                }
+            }
+        }
+    }
+    if (empty($cfg['WW_DB_HOST'])) {
+        define('WW_DB_SOURCE', '');
+        return;
+    }
+    foreach ($cfg as $const => $v) {
+        define($const, $const === 'WW_DB_PORT' ? (int)$v : $v);
+    }
+    define('WW_DB_SOURCE', $source);
+}
+
+/** Paprastas .env skaitytuvas: KEY=VALUE, # komentarai, kabutės, „export". */
+function ww_parse_env_file(string $file): array
+{
+    $out = [];
+    foreach (preg_split('/\R/', (string)@file_get_contents($file)) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') {
+            continue;
+        }
+        if (!preg_match('/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/', $line, $m)) {
+            continue;
+        }
+        $v = trim($m[2]);
+        if ($v !== '' && ($v[0] === '"' || $v[0] === "'")) {
+            $q = $v[0];
+            $end = strpos($v, $q, 1);
+            $v = $end === false ? substr($v, 1) : substr($v, 1, $end - 1);
+        } else {
+            $v = trim(preg_replace('/\s+#.*$/', '', $v)); // komentaras eilutės gale
+        }
+        $out[$m[1]] = $v;
+    }
+    return $out;
 }
 if (!defined('WW_TIMEZONE')) {
     define('WW_TIMEZONE', 'Europe/Vilnius');
@@ -46,9 +145,16 @@ function db(): PDO
         $port = defined('WW_DB_PORT') && WW_DB_PORT ? (int)WW_DB_PORT : 3306;
         $name = defined('WW_DB_NAME') ? WW_DB_NAME : '';
         $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
-        $pdo = new PDO($dsn, defined('WW_DB_USER') ? WW_DB_USER : '', defined('WW_DB_PASS') ? WW_DB_PASS : '', [
-            PDO::ATTR_TIMEOUT => 15,
-        ]);
+        try {
+            $pdo = new PDO($dsn, defined('WW_DB_USER') ? WW_DB_USER : '', defined('WW_DB_PASS') ? WW_DB_PASS : '', [
+                PDO::ATTR_TIMEOUT => 15,
+            ]);
+        } catch (PDOException $e) {
+            // Aiški klaida vietoj balto puslapio. Tyliai grįžti į SQLite NEGALIMA –
+            // duomenys išsiskirstytų į dvi bazes.
+            ww_db_fatal('Nepavyko prisijungti prie MySQL duomenų bazės (' . $name . ' @ ' . $host . ':' . $port . ').',
+                $e->getMessage(), (string)WW_DB_SOURCE);
+        }
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
@@ -68,6 +174,26 @@ function db(): PDO
     $pdo->exec('PRAGMA foreign_keys = ON');
     migrate($pdo);
     return $pdo;
+}
+
+/** Parodo aiškią DB klaidą (naršyklėje – puslapis, cron/CLI – tekstas) ir sustoja. */
+function ww_db_fatal(string $what, string $detail, string $source): never
+{
+    $detail = preg_replace('/password\s*=\s*\S+/i', 'password=***', $detail);
+    $hint = 'Patikrinkite duomenų bazės pavadinimą, vartotoją ir slaptažodį (nustatymai paimti iš: '
+        . ($source !== '' ? $source : 'config.php') . '). Hostingeryje: hPanel → Databases → MySQL Databases.';
+    error_log('WebWatch DB: ' . $what . ' ' . $detail);
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "$what\n$detail\n$hint\n");
+        exit(1);
+    }
+    http_response_code(503);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+        . '<title>WebWatch – DB klaida</title><body style="font-family:system-ui;max-width:640px;margin:40px auto;padding:0 16px">'
+        . '<h2>⚠️ ' . htmlspecialchars($what) . '</h2><p>' . htmlspecialchars($hint) . '</p>'
+        . '<pre style="white-space:pre-wrap;background:#f4f4f6;padding:12px;border-radius:8px">' . htmlspecialchars($detail) . '</pre></body>';
+    exit;
 }
 
 /** Įterpimas/atveju atnaujinimas („upsert“) – veikia su SQLite ir MySQL. */
@@ -237,6 +363,132 @@ function migrate(PDO $pdo): void
         'diag_at' => 'INTEGER NOT NULL DEFAULT 0',           // kada gautas paskutinis diag
         'offline_alerted' => 'INTEGER NOT NULL DEFAULT 0',   // kada pranešta, kad atsijungė (0 – ne)
     ]);
+    if ($mysql) {
+        ww_import_sqlite($pdo); // pirmą kartą perėjus į MySQL – perkeliami seni duomenys
+    }
+}
+
+/**
+ * Perėjus nuo SQLite prie MySQL – vieną kartą automatiškai perkelia visus duomenis
+ * (stebėjimus, istoriją, nustatymus, push prenumeratas, kompiuterius su raktais),
+ * kad nieko nereikėtų kurti iš naujo ir kompiuterių nereikėtų perdiegti.
+ * Perkeliama TIK į tuščią MySQL bazę. SQLite failas paliekamas kaip atsarginė kopija.
+ */
+function ww_import_sqlite(PDO $my): void
+{
+    $file = WW_DATA . '/webwatch.sqlite';
+    $marker = WW_DATA . '/.sqlite-imported';
+    if (!is_file($file) || is_file($marker)) {
+        return; // greitas kelias kiekvienai užklausai
+    }
+    $state = function () use ($my): array {
+        $done = $my->query("SELECT v FROM settings WHERE k = 'sqlite_imported'")->fetchColumn();
+        $used = (int)$my->query('SELECT (SELECT COUNT(*) FROM watches) + (SELECT COUNT(*) FROM agents)')->fetchColumn();
+        $failed = (int)$my->query("SELECT v FROM settings WHERE k = 'sqlite_import_failed'")->fetchColumn();
+        return [$done !== false, $used > 0, $failed];
+    };
+    [$done, $used, $failed] = $state();
+    if ($done || $used) {
+        @file_put_contents($marker, $done ? 'imported' : 'skipped: mysql not empty');
+        return;
+    }
+    if ($failed > time() - 600) {
+        return; // nepavyko ką tik – nebandom kiekvienai užklausai, tik kas 10 min
+    }
+    if (!(int)$my->query("SELECT GET_LOCK('ww_sqlite_import', 60)")->fetchColumn()) {
+        return;
+    }
+    try {
+        [$done, $used] = $state();
+        if ($done || $used) {
+            return; // kitas procesas jau perkėlė
+        }
+        @set_time_limit(600);
+        $lite = new PDO('sqlite:' . $file);
+        $lite->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $lite->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $lite->exec('PRAGMA busy_timeout = 30000');
+        $counts = [];
+        foreach (['settings', 'watches', 'changes', 'subscriptions', 'queue', 'agents', 'log'] as $t) {
+            $exists = $lite->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = " . $lite->quote($t))->fetchColumn();
+            if (!$exists) {
+                continue;
+            }
+            $meta = [];
+            foreach ($my->query("SHOW COLUMNS FROM `$t`")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $meta[$c['Field']] = $c;
+            }
+            $src = array_column($lite->query("PRAGMA table_info($t)")->fetchAll(), 'name');
+            $cols = array_values(array_intersect($src, array_keys($meta)));
+            if (!$cols) {
+                continue;
+            }
+            $q = '`' . implode('`, `', $cols) . '`';
+            $verb = $t === 'settings' ? 'REPLACE' : 'INSERT IGNORE'; // nustatymai iš SQLite laimi (VAPID raktai, slaptažodis)
+            $ins = $my->prepare("$verb INTO `$t` ($q) VALUES (" . implode(', ', array_fill(0, count($cols), '?')) . ')');
+            $n = 0;
+            $my->beginTransaction();
+            foreach ($lite->query("SELECT $q FROM $t") as $row) {
+                $vals = [];
+                foreach ($cols as $c) {
+                    $vals[] = ww_import_value($row[$c], $meta[$c]);
+                }
+                $ins->execute($vals);
+                if (++$n % 500 === 0) {
+                    $my->commit();
+                    $my->beginTransaction();
+                }
+            }
+            $my->commit();
+            $counts[$t] = $n;
+        }
+        $summary = json_encode(['at' => time(), 'rows' => $counts]);
+        $my->prepare("REPLACE INTO settings (k, v) VALUES ('sqlite_imported', ?)")->execute([$summary]);
+        $my->exec("DELETE FROM settings WHERE k = 'sqlite_import_failed'");
+        $parts = [];
+        foreach ($counts as $t => $n) {
+            $parts[] = "$t: $n";
+        }
+        $my->prepare('INSERT INTO log (created, level, message) VALUES (?, ?, ?)')
+            ->execute([time(), 'info', 'Duomenys perkelti iš SQLite į MySQL (' . implode(', ', $parts) . '). SQLite failas paliktas kaip atsarginė kopija.']);
+        @file_put_contents($marker, $summary);
+    } catch (Throwable $e) {
+        if ($my->inTransaction()) {
+            $my->rollBack();
+        }
+        error_log('WebWatch SQLite→MySQL: ' . $e->getMessage());
+        try {
+            $my->prepare("REPLACE INTO settings (k, v) VALUES ('sqlite_import_failed', ?)")->execute([(string)time()]);
+            $my->prepare('INSERT INTO log (created, level, message) VALUES (?, ?, ?)')
+                ->execute([time(), 'error', 'Nepavyko perkelti duomenų iš SQLite į MySQL: ' . mb_substr($e->getMessage(), 0, 500)]);
+        } catch (Throwable $e2) {
+        }
+    } finally {
+        $my->query("SELECT RELEASE_LOCK('ww_sqlite_import')");
+    }
+}
+
+/** Pritaiko SQLite reikšmę griežtam MySQL režimui (NULL, skaičiai, ilgis). */
+function ww_import_value($v, array $col)
+{
+    $type = strtolower((string)$col['Type']);
+    $num = (bool)preg_match('/int|decimal|float|double|real/', $type);
+    if ($v === null) {
+        if ($col['Null'] === 'YES') {
+            return null;
+        }
+        return $col['Default'] ?? ($num ? 0 : '');
+    }
+    if (str_contains($type, 'int')) {
+        return is_numeric($v) ? (int)$v : 0;
+    }
+    if ($num) {
+        return is_numeric($v) ? (float)$v : 0;
+    }
+    if (preg_match('/^(?:var)?char\((\d+)\)/', $type, $m)) {
+        return mb_substr((string)$v, 0, (int)$m[1]);
+    }
+    return $v;
 }
 
 function add_columns(PDO $pdo, string $table, array $cols): void
@@ -253,7 +505,15 @@ function add_columns(PDO $pdo, string $table, array $cols): void
     }
     foreach ($cols as $name => $def) {
         if (!isset($have[$name])) {
-            $pdo->exec("ALTER TABLE $table ADD COLUMN $name $def");
+            try {
+                $pdo->exec("ALTER TABLE $table ADD COLUMN $name $def");
+            } catch (PDOException $e) {
+                // Kelios užklausos vienu metu (pvz. po atnaujinimo „skambina" visi agentai) gali
+                // bandyti pridėti tą patį stulpelį – jei jis jau yra, tai ne klaida.
+                if (stripos($e->getMessage(), 'duplicate column') === false) {
+                    throw $e;
+                }
+            }
         }
     }
 }

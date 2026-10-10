@@ -13,6 +13,10 @@ Options -Indexes
 <FilesMatch "^(config\.php|config\.sample\.php|README\.md|\.git.*)$">
     Require all denied
 </FilesMatch>
+# Paslėpti failai (.env su DB slaptažodžiu ir pan.) ir duomenų bazių failai – niekada neatiduodami
+<FilesMatch "(^\.|\.(sqlite|sqlite3|db|env|log|bak|sql)$)">
+    Require all denied
+</FilesMatch>
 
 <IfModule mod_headers.c>
     <Files "sw.js">

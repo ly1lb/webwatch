@@ -163,9 +163,18 @@ Jei įdarbinate **namų kompiuterius** ir stebite daug puslapių, gali pasitaiky
 (SQLite prastai tvarkosi, kai vienu metu rašo daug procesų). Tokiu atveju pereikite prie **MySQL / MariaDB**:
 
 1. Hostinger hPanel → **Databases → MySQL Databases** → sukurkite duombazę ir vartotoją.
-2. Pervadinkite `config.sample.php` į `config.php` ir įrašykite `WW_DB_HOST/NAME/USER/PASS` (pavyzdys faile).
-3. Atidarykite WebWatch – lentelės sukuriamos automatiškai.
-4. Senus stebėjimus perkelkite per **Nustatymai → Atsarginė kopija** (eksportas iš SQLite, importas į MySQL).
+2. Įrašykite prisijungimo duomenis į `.env` failą – **vienu katalogu aukščiau** nei programa
+   (ne viešai; tinka ir programos kataloge – `.htaccess` jį užrakina):
+   ```
+   DB_HOST=localhost
+   DB_DATABASE=u123456_webwatch
+   DB_USERNAME=u123456_webwatch
+   DB_PASSWORD=jusu_slaptazodis
+   ```
+   (arba `config.php` faile – `WW_DB_HOST/NAME/USER/PASS`, pavyzdys `config.sample.php`).
+3. Atidarykite WebWatch – lentelės sukuriamos, o **visi esami duomenys perkeliami iš SQLite automatiškai**
+   (stebėjimai, istorija, kompiuteriai su raktais – jų perdiegti nereikia). SQLite failas paliekamas atsargai.
+4. Nustatymai → **Duomenų bazė** parodo, kuri DB naudojama ir iš kur paimti nustatymai.
 
 Nuo šios versijos ir su SQLite užraktų problema gerokai sumažinta (WAL, ilgesnis laukimas, automatinis
 pakartojimas), tad daugeliu atvejų SQLite pakanka.

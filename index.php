@@ -1284,6 +1284,30 @@ function view_settings(?array $flash): void
         </form>
     </section>
 
+    <section class="card" id="database">
+        <h2>🗄️ Duomenų bazė</h2>
+        <?php if (ww_driver() === 'mysql'): $imp = json_decode((string)setting('sqlite_imported', ''), true); ?>
+            <p>✅ Naudojama <b>MySQL</b>: <code><?= h(WW_DB_NAME) ?></code> @ <code><?= h(WW_DB_HOST) ?></code>
+                <span class="muted small">(nustatymai iš: <?= h(WW_DB_SOURCE ?: 'config.php') ?>)</span></p>
+            <?php if (is_array($imp)): ?>
+                <p class="hint">Seni duomenys perkelti iš SQLite <?= h(date('Y-m-d H:i', (int)$imp['at'])) ?>:
+                    <?= h(implode(', ', array_map(fn($t, $n) => "$t $n", array_keys($imp['rows']), $imp['rows']))) ?>.
+                    Senas failas <code>data/webwatch.sqlite</code> paliktas kaip atsarginė kopija.</p>
+            <?php endif; ?>
+        <?php else: ?>
+            <p>Naudojama <b>SQLite</b> (failas <code>data/webwatch.sqlite</code>).</p>
+            <p class="hint">Kai vienu metu rašo cron, namų kompiuteriai ir naršyklė, SQLite kartais užsirakina
+                („database is locked"). Rekomenduojama <b>MySQL</b>: hPanel → Databases → MySQL Databases → sukurkite bazę ir vartotoją,
+                tada įrašykite duomenis į <code>.env</code> failą <b>vienu katalogu aukščiau</b> nei programa (ne viešai) arba į <code>config.php</code>:</p>
+            <pre class="mono small">DB_HOST=localhost
+DB_DATABASE=u123456_webwatch
+DB_USERNAME=u123456_webwatch
+DB_PASSWORD=jusu_slaptazodis</pre>
+            <p class="hint">Pirmą kartą prisijungus visi esami duomenys (stebėjimai, istorija, kompiuteriai, nustatymai) bus
+                <b>perkelti automatiškai</b> – kompiuterių perdiegti nereikės.</p>
+        <?php endif; ?>
+    </section>
+
     <section class="card" id="backup">
         <h2>💾 Atsarginė kopija</h2>
         <p class="muted">Eksportuojami visi stebėjimai su nustatymais (be istorijos). Importuojant jie pridedami prie esamų.</p>
