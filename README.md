@@ -155,6 +155,15 @@ data/            – SQLite duomenų bazė ir sesijos (uždrausta prieiga iš in
 config.sample.php – nebūtini nustatymai (pervadinkite į config.php)
 ```
 
+## Vieta serveryje (automatinis valymas)
+
+- **Tekstinė pakeitimų istorija** saugoma suspausta (~4–8 k. mažiau vietos): numatytai 1 metus,
+  ne daugiau 1000 pakeitimų vienam stebėjimui. Laikas keičiamas Nustatymai → „Vieta serveryje".
+- **Ekrano nuotraukos** (didžiausios) – tik paskutinių 20 pakeitimų vienam stebėjimui.
+- Kartą per parą (cron) automatiškai ištrinama tik tai, kas viršija ribas, taip pat: žurnalas senesnis nei
+  60 d., robotų / neprisijungusių lankytojų sesijos, seni prisijungimo bandymai; SQLite failas suspaudžiamas.
+- Nustatymuose matyti, kiek vietos užima DB, nuotraukos ir sesijos; yra mygtukas „Išvalyti dabar".
+
 ## Duomenų bazė (SQLite arba MySQL)
 
 Numatytai naudojama **SQLite** – nieko daryti nereikia, viskas veikia iš karto.

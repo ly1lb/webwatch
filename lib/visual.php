@@ -6,6 +6,8 @@ declare(strict_types=1);
  * Nuotraukos saugomos diske data/shots/<watch_id>/.
  */
 
+const WW_KEEP_SHOTS = 20; // ekrano nuotraukos laikomos tik paskutinių N pakeitimų vienam stebėjimui
+
 function visual_available(): bool
 {
     return function_exists('imagecreatefromstring') && function_exists('imagecreatetruecolor');
@@ -194,6 +196,9 @@ function run_visual_check(array $w, bool $sendNotify): array
         file_put_contents($dir . "/$cid-old.png", $old);
         file_put_contents($dir . "/$cid-new.png", $png);
         file_put_contents($dir . "/$cid-diff.png", $d['diff']);
+        // Kaip ir teksto stebėjimams – ne daugiau WW_KEEP_CHANGES pakeitimų vienam stebėjimui
+        db_write('DELETE FROM changes WHERE watch_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT '
+            . WW_KEEP_CHANGES . ') keep)', [$w['id'], $w['id']]);
         prune_shots($dir, (int)$w['id']);
         db_write('UPDATE watches SET last_check=?, last_status=\'ok\', last_error=\'\', fail_count=0, fail_since=0, last_change=?, unseen=unseen+1 WHERE id=?',
             [$now, $now, $w['id']]);
@@ -209,16 +214,25 @@ function run_visual_check(array $w, bool $sendNotify): array
 }
 
 /** Palieka tik paskutinių pakeitimų nuotraukas. */
-function prune_shots(string $dir, int $watchId): void
+function prune_shots(string $dir, int $watchId): int
 {
-    $st = db()->prepare('SELECT id FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
+    // Nuotraukos (3 PNG pakeitimui) – didžiausias vietos „ėdikas", todėl laikomos tik paskutinių WW_KEEP_SHOTS
+    $st = db()->prepare('SELECT id FROM changes WHERE watch_id = ? AND has_shot = 1 ORDER BY id DESC LIMIT ' . WW_KEEP_SHOTS);
     $st->execute([$watchId]);
     $keep = array_flip(array_map('intval', array_column($st->fetchAll(), 'id')));
+    $n = 0;
     foreach (glob($dir . '/*-*.png') ?: [] as $f) {
         if (preg_match('/(\d+)-(old|new|diff)\.png$/', $f, $m) && !isset($keep[(int)$m[1]])) {
-            @unlink($f);
+            $n += @unlink($f) ? 1 : 0;
         }
     }
+    // Senesniems pakeitimams pažymim, kad nuotraukų nebėra (kad nerodytų sugadintų paveikslėlių)
+    $sql = 'UPDATE changes SET has_shot = 0 WHERE watch_id = ? AND has_shot = 1';
+    if ($keep) {
+        $sql .= ' AND id NOT IN (' . implode(',', array_keys($keep)) . ')';
+    }
+    db_write($sql, [$watchId]);
+    return $n;
 }
 
 /** Pašalina viso stebėjimo nuotraukų katalogą (ištrynus stebėjimą). */

@@ -192,7 +192,7 @@ try {
             if (!$c) {
                 out(['ok' => false, 'error' => 'Nerasta']);
             }
-            out(['ok' => true, 'html' => diff_html(line_diff(comparable_text((string)$c['old_content'], $c), comparable_text((string)$c['new_content'], $c)))]);
+            out(['ok' => true, 'html' => diff_html(line_diff(comparable_text((string)unpack_text($c['old_content']), $c), comparable_text((string)unpack_text($c['new_content']), $c)))]);
 
         case 'test_channel':
             $ch = (string)($input['channel'] ?? '');

@@ -287,6 +287,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'general' => ['quiet_from', 'quiet_to'],
             'bypass' => ['jina_key', 'scrape_provider', 'scrape_key', 'render_api'],
         ];
+        if (($_POST['section'] ?? '') === 'storage') {
+            $d = (int)($_POST['keep_days'] ?? WW_HISTORY_DAYS_DEFAULT);
+            set_setting('keep_days', (string)(in_array($d, [0, 30, 90, 180, 365], true) ? $d : WW_HISTORY_DAYS_DEFAULT));
+            flash('Išsaugota');
+            redirect('?view=settings#storage');
+        }
         if (($_POST['section'] ?? '') === 'errors') {
             set_setting('err_channels', implode(',', array_intersect(WW_CHANNELS, (array)($_POST['err_channels'] ?? []))));
             set_setting('err_after', (string)max(2, min(10, (int)($_POST['err_after'] ?? WW_FAILS_BEFORE_ALERT))));
@@ -385,6 +391,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         redirect('?view=settings#agents');
+    }
+    if ($do === 'cleanup_now') {
+        $r = ww_housekeeping(true);
+        flash('Išvalyta: pakeitimų ' . $r['changes'] . ', nuotraukų ' . $r['shots'] . ', sesijų ' . $r['sessions']
+            . ', žurnalo įrašų ' . $r['log'] . '. Atlaisvinta ' . ww_bytes($r['freed']) . '.');
+        redirect('?view=settings#storage');
+    }
+    if ($do === 'delete_sqlite_backup' && ww_driver() === 'mysql' && setting('sqlite_imported')) {
+        foreach (['', '-wal', '-shm'] as $sfx) {
+            @unlink(WW_DATA . '/webwatch.sqlite' . $sfx);
+        }
+        flash('Sena SQLite kopija ištrinta');
+        redirect('?view=settings#storage');
     }
     if ($do === 'agent_rotate') {
         // Įjungia/išjungia tikrinimo taškų rotaciją (round-robin po visus kompiuterius)
@@ -812,9 +831,12 @@ function view_watch(?array $flash): void
         db()->prepare('UPDATE watches SET unseen = 0 WHERE id = ?')->execute([$id]);
     }
     // Turinys nekraunamas visiems įrašams – skirtumai atsisiunčiami tik atidarius (api.php?action=diff).
-    $st = db()->prepare('SELECT id, created, summary, change_pct, has_shot, old_content IS NOT NULL AS has_old FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES);
+    // Istorija gali būti ilga – rodom po 50, „Rodyti senesnius" prideda dar.
+    $showN = max(50, min(WW_KEEP_CHANGES, (int)($_GET['n'] ?? 50)));
+    $st = db()->prepare('SELECT id, created, summary, change_pct, has_shot, old_content IS NOT NULL AS has_old FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . $showN);
     $st->execute([$id]);
     $changes = $st->fetchAll();
+    $totalChanges = (int)db()->query('SELECT COUNT(*) FROM changes WHERE watch_id = ' . (int)$id)->fetchColumn();
     page_start(watch_title($w), true, 'watch');
     render_flash($flash);
     ?>
@@ -935,9 +957,14 @@ function view_watch(?array $flash): void
                     <div class="diff"><div class="d-skip">Kraunama…</div></div>
                 <?php else: ?>
                     <pre class="summary"><?= h((string)$c['summary']) ?></pre>
+                    <?php if ($w['compare_mode'] === 'visual'): ?><p class="hint">Šio senesnio pakeitimo nuotraukos ištrintos – laikomos tik paskutinių <?= WW_KEEP_SHOTS ?> pakeitimų.</p><?php endif; ?>
                 <?php endif; ?>
             </details>
         <?php endforeach; ?>
+        <?php if ($totalChanges > count($changes)): ?>
+            <p class="center"><a class="btn small" href="?view=watch&id=<?= $id ?>&n=<?= count($changes) + 100 ?>#ch-more">Rodyti senesnius (dar <?= $totalChanges - count($changes) ?>)</a></p>
+            <span id="ch-more"></span>
+        <?php endif; ?>
         <form method="post" onsubmit="return confirm('Išvalyti istoriją?')" class="right">
             <?= csrf_field() ?><input type="hidden" name="do" value="clear_history"><input type="hidden" name="id" value="<?= $id ?>">
             <button class="btn small ghost">Išvalyti istoriją</button>
@@ -1306,6 +1333,39 @@ DB_PASSWORD=jusu_slaptazodis</pre>
             <p class="hint">Pirmą kartą prisijungus visi esami duomenys (stebėjimai, istorija, kompiuteriai, nustatymai) bus
                 <b>perkelti automatiškai</b> – kompiuterių perdiegti nereikės.</p>
         <?php endif; ?>
+    </section>
+
+    <section class="card" id="storage">
+        <h2>🧹 Vieta serveryje</h2>
+        <?php $u = ww_storage_usage(); $hk = json_decode((string)setting('housekeeping_stats', ''), true); $kd = history_days(); ?>
+        <table class="kv">
+            <tr><td>Duomenų bazė</td><td><b><?= ww_bytes($u['db']) ?></b></td></tr>
+            <tr><td>Ekrano nuotraukos</td><td><b><?= ww_bytes($u['shots']) ?></b> <span class="muted small">(<?= $u['shot_files'] ?> failų)</span></td></tr>
+            <tr><td>Sesijos</td><td><b><?= ww_bytes($u['sessions']) ?></b> <span class="muted small">(<?= $u['session_files'] ?> failų)</span></td></tr>
+            <?php if ($u['sqlite_backup'] > 0): ?>
+                <tr><td>Sena SQLite kopija</td><td><b><?= ww_bytes($u['sqlite_backup']) ?></b>
+                    <form method="post" class="inline" onsubmit="return confirm('Ištrinti seną SQLite failą? Visi duomenys jau MySQL bazėje.')">
+                        <?= csrf_field() ?><input type="hidden" name="do" value="delete_sqlite_backup"><button class="btn small ghost">Ištrinti</button></form></td></tr>
+            <?php endif; ?>
+            <tr><td>Iš viso</td><td><b><?= ww_bytes($u['total']) ?></b></td></tr>
+        </table>
+        <p class="hint"><b>Tekstinė istorija</b> saugoma suspausta (užima mažai) – pagal žemiau pasirinktą laiką, bet ne daugiau
+            <?= WW_KEEP_CHANGES ?> pakeitimų vienam stebėjimui. <b>Ekrano nuotraukos</b> didelės, todėl laikomos tik paskutinių
+            <?= WW_KEEP_SHOTS ?> pakeitimų. Kartą per parą automatiškai patikrinama ir ištrinama tik tai, kas viršija šias ribas,
+            taip pat žurnalas senesnis nei <?= WW_LOG_DAYS ?> d., robotų / neprisijungusių lankytojų sesijos ir seni prisijungimo bandymai.
+            <?php if ($hk): ?><br>Paskutinis valymas: <?= h(date('Y-m-d H:i', (int)$hk['at'])) ?> – atlaisvinta <?= ww_bytes((int)$hk['freed']) ?>.<?php endif; ?></p>
+        <form method="post" class="form">
+            <?= csrf_field() ?><input type="hidden" name="do" value="save_settings"><input type="hidden" name="section" value="storage">
+            <label>Laikyti pakeitimų istoriją
+                <select name="keep_days" onchange="this.form.submit()">
+                    <?php foreach ([30 => '30 dienų', 90 => '90 dienų', 180 => '180 dienų', 365 => '1 metus (numatyta)', 0 => 'Neribotai (bet ≤ ' . WW_KEEP_CHANGES . ' stebėjimui)'] as $v => $l): ?>
+                        <option value="<?= $v ?>" <?= $v === $kd ? 'selected' : '' ?>><?= h($l) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+        </form>
+        <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="cleanup_now">
+            <button class="btn small">🧹 Išvalyti dabar</button></form>
     </section>
 
     <section class="card" id="backup">

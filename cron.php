@@ -62,5 +62,13 @@ foreach ($watches as $w) {
     }
 }
 echo "Patikrinta: $checked, pasikeitė: $changed\n";
+try {
+    $hk = ww_housekeeping(); // kartą per parą: sena istorija, nuotraukos, sesijos, žurnalas
+    if ($hk !== null) {
+        echo 'Valymas: atlaisvinta ' . ww_bytes($hk['freed']) . "\n";
+    }
+} catch (Throwable $e) {
+    ww_log('error', 'Valymas: ' . $e->getMessage());
+}
 flock($lock, LOCK_UN);
 fclose($lock);

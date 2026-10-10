@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.10.0');
+define('WW_VERSION', '1.11.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -126,6 +126,7 @@ require_once __DIR__ . '/webpush.php';
 require_once __DIR__ . '/mailer.php';
 require_once __DIR__ . '/notify.php';
 require_once __DIR__ . '/check.php';
+require_once __DIR__ . '/housekeeping.php';
 
 /** Naudojama DB variklio pavadinimas: 'mysql' arba 'sqlite'. */
 function ww_driver(): string

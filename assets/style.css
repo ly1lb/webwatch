@@ -313,3 +313,9 @@ input.search { margin: 0 0 10px; background: var(--card); }
 /* Diegimo langelis – kad būtų aiškiai matomas paspaudus „Įdiegti" */
 .ag-install{scroll-margin-top:70px;border:2px solid var(--accent,#5b4ff0);border-radius:12px;padding:12px 14px;margin-top:10px}
 .ag-install-note{background:rgba(91,79,240,.08);border-radius:8px;padding:8px 10px;font-size:.88rem}
+
+/* Vieta serveryje */
+table.kv { width: 100%; border-collapse: collapse; margin: 4px 0 10px; font-size: .92rem; }
+table.kv td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.kv td:last-child { text-align: right; }
+form.inline { display: inline; margin-left: 6px; }

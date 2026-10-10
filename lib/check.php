@@ -2,7 +2,30 @@
 declare(strict_types=1);
 
 const WW_MAX_CONTENT = 300000;
-const WW_KEEP_CHANGES = 50;
+const WW_KEEP_CHANGES = 1000;   // daugiausia pakeitimų istorijoje vienam stebėjimui (tekstas saugomas suspaustas)
+
+/**
+ * Istorijos tekstas saugomas suspaustas (gzip + base64, ~4–8 k. mažiau vietos).
+ * Trumpi tekstai paliekami kaip yra. Senus (nesuspaustus) įrašus unpack_text() irgi skaito.
+ */
+function pack_text(?string $s): ?string
+{
+    if ($s === null || strlen($s) < 1024 || str_starts_with($s, 'gz:') || !function_exists('gzdeflate')) {
+        return $s;
+    }
+    $z = gzdeflate($s, 6);
+    return $z === false ? $s : 'gz:' . base64_encode($z);
+}
+
+function unpack_text(?string $s): ?string
+{
+    if ($s === null || !str_starts_with($s, 'gz:')) {
+        return $s;
+    }
+    $raw = base64_decode(substr($s, 3), true);
+    $out = $raw === false ? false : @gzinflate($raw);
+    return $out === false ? $s : $out;
+}
 const WW_FAILS_BEFORE_ALERT = 3;  // numatytasis; keičiamas Nustatymuose (err_after)
 const WW_RETRY_MIN = 5;          // po nesėkmės kartojama ne rečiau nei kas tiek min (net jei tikrinama kartą per parą)
 const WW_DOWN_RECHECK_MIN = 60;  // po įspėjimo – ne rečiau nei kas tiek min, kad greitai sužinotumėt, kada vėl veikia
@@ -224,7 +247,7 @@ function run_check(array $w, bool $sendNotify = true): array
         $fields .= ', last_change = ?, unseen = unseen + 1';
         $params[] = $now;
         db_write('INSERT INTO changes (watch_id, created, old_content, new_content, summary, change_pct) VALUES (?, ?, ?, ?, ?, ?)',
-            [$w['id'], $now, $old, $new, $summary, $pct]);
+            [$w['id'], $now, pack_text($old), pack_text($new), $summary, $pct]);
         // Įterptas SELECT su papildomu lygmeniu – kad veiktų ir MySQL (jis neleidžia LIMIT tiesiai IN viduje)
         db_write('DELETE FROM changes WHERE watch_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM changes WHERE watch_id = ? ORDER BY id DESC LIMIT ' . WW_KEEP_CHANGES . ') keep)',
             [$w['id'], $w['id']]);
