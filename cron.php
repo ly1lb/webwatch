@@ -36,6 +36,11 @@ $flushed = flush_queue();
 if ($flushed) {
     echo "Išsiųsti atidėti pranešimai: $flushed\n";
 }
+try {
+    agents_health_check(); // pranešti, jei namų kompiuteris atsijungė / vėl prisijungė
+} catch (Throwable $e) {
+    ww_log('error', 'Kompiuterių būsenos patikra: ' . $e->getMessage());
+}
 $watches = due_watches();
 $checked = 0;
 $changed = 0;

@@ -12,7 +12,7 @@ param([switch]$Install, [switch]$Uninstall)
 $Server = "__WW_SERVER__"
 $Token  = "__WW_TOKEN__"
 $Name   = "__WW_NAME__"
-$Version = "7"
+$Version = "8"
 $PollWait = 25
 $BrowserTimeoutMs = 35000
 
@@ -120,10 +120,87 @@ function Install-Agent {
     New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
     $dst = Join-Path $dstDir "ww-agent.ps1"
     Copy-Item -Path $PSCommandPath -Destination $dst -Force
-    $action = "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dst`""
-    # Suplanuota uzduotis: paleisti prisijungus, laikyti veikiancia
-    schtasks /Create /TN "WebWatchAgent" /TR $action /SC ONLOGON /RL LIMITED /F | Out-Null
+    $taskArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dst`""
+
+    # SVARBU: paprastas „schtasks /Create" pagal nutylejima sukuria uzduoti su
+    # „Stop the task if it runs longer than 3 days" – po 72 val. Windows agenta NUZUDO
+    # (todel visi kompiuteriai „atsijungdavo" kas ~3 paras). Be to – tik nuo elektros tinklo
+    # ir be pakartotinio paleidimo. Todel uzduoti kuriame is XML su tiksliais nustatymais:
+    #  - be laiko limito (PT0S), veikia ir nuo baterijos;
+    #  - paleidziama prisijungus IR kas 5 min („sargas"): jei agentas kazkodel sustojo,
+    #    po ≤5 min jis vel veikia; jei jau veikia – antras nepaleidziamas (IgnoreNew).
+    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $esc = { param($t) [System.Security.SecurityElement]::Escape([string]$t) }
+    $start = (Get-Date).AddMinutes(1).ToString("yyyy-MM-ddTHH:mm:ss")
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>WebWatch tikrinimo taskas</Description></RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>$(& $esc $user)</UserId></LogonTrigger>
+    <TimeTrigger>
+      <Repetition><Interval>PT5M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <StartBoundary>$start</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$(& $esc $user)</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>$(& $esc $taskArgs)</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+    $xmlPath = Join-Path $dstDir "task.xml"
+    [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::Unicode)
+    schtasks /Create /TN "WebWatchAgent" /XML "$xmlPath" /F | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        # Atsargine galimybe (senesni Windows / apribojimai): PowerShell ScheduledTasks modulis
+        Write-Host "XML uzduoties sukurti nepavyko – bandau kitu budu..."
+        try {
+            $act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs
+            $trg = New-ScheduledTaskTrigger -AtLogOn -User $user
+            $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries `
+                -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew `
+                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+            Register-ScheduledTask -TaskName "WebWatchAgent" -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
+        } catch {
+            schtasks /Create /TN "WebWatchAgent" /TR "powershell $taskArgs" /SC ONLOGON /RL LIMITED /F | Out-Null
+            Write-Host "DEMESIO: uzduotis sukurta su Windows numatytais nustatymais (gali buti 3 paru limitas)."
+        }
+    }
+    Remove-Item $xmlPath -Force -ErrorAction SilentlyContinue
     schtasks /Run /TN "WebWatchAgent" | Out-Null
+    try {
+        $lim = (Get-ScheduledTask -TaskName "WebWatchAgent" -ErrorAction Stop).Settings.ExecutionTimeLimit
+        if ($lim -eq "PT0S") { Write-Host "Uzduotis: be laiko limito, su automatiniu atstatymu kas 5 min - gerai." }
+        else { Write-Host "DEMESIO: uzduoties laiko limitas $lim - agentas gali buti isjungtas." }
+    } catch {}
     Write-Host "Idiegta. Tikrinimo taskas veiks ir po perkrovimo. Sita langa galite uzdaryti."
     exit 0
 }
@@ -158,7 +235,11 @@ function Find-Browser {
 $script:BrowserExe = "?"
 function Invoke-BrowserFetch($url, $ua) {
     if ($script:BrowserExe -eq "?") {
-        $script:BrowserExe = Find-Browser
+        try {
+    $lim = (Get-ScheduledTask -TaskName "WebWatchAgent" -ErrorAction Stop).Settings.ExecutionTimeLimit
+    if ($lim -and $lim -ne "PT0S") { Log "DEMESIO: Windows uzduotis turi laiko limita ($lim) - agentas bus isjungtas! Spauskite 'Idiegti' ir paleiskite komanda is naujo." }
+} catch {}
+$script:BrowserExe = Find-Browser
         if ($script:BrowserExe) { Write-Host "Rasta narsykle sudetingiems puslapiams: $($script:BrowserExe)" }
         else { Write-Host "Narsykle nerasta - sudetingoms svetainems idiekite Chrome arba Edge." }
     }
@@ -279,7 +360,7 @@ while ($true) {
         }
         elseif (-not $job.browser) {
             try {
-                $r = Invoke-WebRequest -Uri $job.url -Headers $h -TimeoutSec 45 -MaximumRedirection 8 -UseBasicParsing -ErrorAction Stop
+                $r = Invoke-WebRequest -Uri $job.url -Headers $h -TimeoutSec 25 -MaximumRedirection 8 -UseBasicParsing -ErrorAction Stop
                 $status = [int]$r.StatusCode
                 $bodyBytes = if ($r.RawContentStream) { $ms = New-Object IO.MemoryStream; $r.RawContentStream.CopyTo($ms); $ms.ToArray() } else { [Text.Encoding]::UTF8.GetBytes([string]$r.Content) }
                 $ctype = [string]$r.Headers["Content-Type"]
@@ -319,7 +400,7 @@ while ($true) {
         $sent = $false
         for ($try = 0; $try -lt 2 -and -not $sent; $try++) {
             try {
-                Invoke-RestMethod -Uri "$($Server)agent.php?action=result&id=$($job.id)" -Method Post -Headers $headers -Body $payload -TimeoutSec 60 | Out-Null
+                Invoke-RestMethod -Uri "$($Server)agent.php?action=result&id=$($job.id)" -Method Post -Headers $headers -Body $payload -TimeoutSec 40 | Out-Null
                 $sent = $true
             } catch { Start-Sleep -Seconds 2 }
         }

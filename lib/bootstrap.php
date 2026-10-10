@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 define('WW_ROOT', dirname(__DIR__));
 define('WW_DATA', WW_ROOT . '/data');
-define('WW_VERSION', '1.8.1');
+define('WW_VERSION', '1.9.0');
 
 if (is_file(WW_ROOT . '/config.php')) {
     require WW_ROOT . '/config.php';
@@ -235,6 +235,7 @@ function migrate(PDO $pdo): void
         'diag' => $lt,                                       // paskutinės agento žurnalo eilutės
         'procs' => 'INTEGER NOT NULL DEFAULT -1',            // naršyklės procesų skaičius (orphan'ai)
         'diag_at' => 'INTEGER NOT NULL DEFAULT 0',           // kada gautas paskutinis diag
+        'offline_alerted' => 'INTEGER NOT NULL DEFAULT 0',   // kada pranešta, kad atsijungė (0 – ne)
     ]);
 }
 

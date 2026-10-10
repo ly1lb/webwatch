@@ -49,6 +49,49 @@ function agent_shipped_version(): int
     return $v;
 }
 
+const WW_AGENT_OFFLINE_ALERT_MIN = 10; // po tiek min tylos – pranešti, kad kompiuteris atsijungė
+
+/**
+ * Kviečiama iš cron: praneša, kai kompiuteris ilgiau nei WW_AGENT_OFFLINE_ALERT_MIN min
+ * nesiryšia, ir kai vėl prisijungia. Pranešimai – į klaidų kanalus (Nustatymai).
+ */
+function agents_health_check(): void
+{
+    if (setting('agent_offline_alert', '1') === '0') {
+        return;
+    }
+    $now = time();
+    $chan = trim((string)setting('err_channels', '')) ?: 'push,fallback';
+    $onlineLeft = count(agents_online());
+    foreach (agents_all() as $a) {
+        $seen = (int)$a['last_seen'];
+        if ($seen <= 0) {
+            continue; // dar niekada neprisijungęs – nėra ką pranešti
+        }
+        $alerted = (int)($a['offline_alerted'] ?? 0); // 0 – nepranešta; kitaip – paskutinio ryšio laikas
+        $offline = $seen < $now - WW_AGENT_OFFLINE_ALERT_MIN * 60;
+        $link = app_url() . '?view=settings#agents';
+        if ($offline && !$alerted) {
+            notify_user($chan, '🖥️ Kompiuteris „' . $a['name'] . '" atsijungė',
+                'Nesiryšia nuo ' . date('m-d H:i', $seen) . ' (' . human_duration($now - $seen) . ').'
+                . "\n" . ($onlineLeft > 0
+                    ? 'Tikrinimus perima kiti kompiuteriai (prisijungę: ' . $onlineLeft . ').'
+                    : 'DĖMESIO: neliko nė vieno prisijungusio kompiuterio – puslapiai, kuriems jų reikia, dabar netikrinami.')
+                . "\nPatikrinkite, ar kompiuteris įjungtas ir prisijungęs prie interneto.",
+                $link, 'agent-' . $a['id']);
+            // Saugom paskutinio ryšio laiką – iš jo vėliau suskaičiuosim, kiek laiko nebuvo
+            db_write('UPDATE agents SET offline_alerted = ? WHERE id = ?', [$seen, $a['id']]);
+            ww_log('info', 'Tikrinimo taškas „' . $a['name'] . '" atsijungė (nesiryšia ' . human_duration($now - $seen) . ')');
+        } elseif (!$offline && $alerted) {
+            notify_user($chan, '✅ Kompiuteris „' . $a['name'] . '" vėl prisijungė',
+                'Nebuvo ryšio apie ' . human_duration(max(0, $seen - $alerted)),
+                $link, 'agent-' . $a['id']);
+            db_write('UPDATE agents SET offline_alerted = 0 WHERE id = ?', [$a['id']]);
+            ww_log('info', 'Tikrinimo taškas „' . $a['name'] . '" vėl prisijungė');
+        }
+    }
+}
+
 function agents_online(): array
 {
     return array_values(array_filter(agents_all(), 'agent_is_online'));

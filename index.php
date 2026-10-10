@@ -290,6 +290,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (($_POST['section'] ?? '') === 'errors') {
             set_setting('err_channels', implode(',', array_intersect(WW_CHANNELS, (array)($_POST['err_channels'] ?? []))));
             set_setting('err_after', (string)max(2, min(10, (int)($_POST['err_after'] ?? WW_FAILS_BEFORE_ALERT))));
+            set_setting('agent_offline_alert', !empty($_POST['agent_offline_alert']) ? '1' : '0');
             flash('Išsaugota');
             redirect('?view=settings#errors');
         }
@@ -1106,6 +1107,8 @@ function view_settings(?array $flash): void
                 <?php endforeach; ?>
                 <p class="hint">Nieko nepažymėjus – siunčiama ten pat, kur to stebėjimo pakeitimų pranešimai.</p>
             </fieldset>
+            <label class="check"><input type="checkbox" name="agent_offline_alert" value="1" <?= setting('agent_offline_alert', '1') !== '0' ? 'checked' : '' ?>>
+                <span>Pranešti, kai namų kompiuteris atsijungia (nesiryšia ilgiau nei <?= WW_AGENT_OFFLINE_ALERT_MIN ?> min) ir kai vėl prisijungia</span></label>
             <div class="actions"><button class="btn primary">Išsaugoti</button></div>
         </form>
     </section>
@@ -1198,14 +1201,15 @@ function view_settings(?array $flash): void
                         <div class="ag-info">
                             <b><?= h($a['name']) ?></b>
                             <?php if ($on && $av > 0): ?>
-                                <span class="ag-ver <?= $av >= 5 ? 'ok' : 'old' ?>" title="Veikianti agento versija">v<?= $av ?><?= $av >= 5 ? ' ✓' : ' – sena' ?></span>
+                                <?php $upToDate = $av >= agent_shipped_version(); ?>
+                                <span class="ag-ver <?= $upToDate ? 'ok' : 'old' ?>" title="Veikianti agento versija">v<?= $av ?><?= $upToDate ? ' ✓' : ' – atnaujinkite' ?></span>
                             <?php endif; ?>
                             <small class="muted">
                                 <?= $on ? 'prisijungęs' : ($a['last_seen'] ? 'matytas ' . h(human_time((int)$a['last_seen'])) : 'dar neprisijungė') ?>
                                 · atlikta <?= (int)$a['jobs_done'] ?>
                                 <?= $a['last_ip'] ? ' · ' . h($a['last_ip']) : '' ?>
                             </small>
-                            <?php if ($on && $av > 0 && $av < 5): ?><small class="err-text">⚠️ Sena versija – ekrano nuotraukos neveiks. Spauskite „Įdiegti" ir paleiskite komandą iš naujo. Jei nepasikeičia – uždarykite seną agento langą arba sustabdykite seną procesą.</small><?php endif; ?>
+                            <?php if ($av > 0 && $av < agent_shipped_version()): ?><small class="err-text">⚠️ Šiame kompiuteryje sena agento versija (v<?= $av ?>, yra v<?= agent_shipped_version() ?>) – spauskite „Įdiegti" ir paleiskite komandą tame kompiuteryje.</small><?php endif; ?>
                             <?php $procs = (int)($a['procs'] ?? -1); if ($procs > 0): ?><small class="muted">🧹 Paskutinį kartą rasta ir automatiškai išvalyta pakibusių naršyklės procesų: <?= $procs ?></small><?php endif; ?>
                             <?php if ($a['last_error']): ?><small class="err-text">⚠️ <?= h($a['last_error']) ?></small><?php endif; ?>
                         </div>

@@ -35,7 +35,7 @@ import urllib.error
 SERVER = "__WW_SERVER__"          # pvz. https://watch.jusu-domenas.lt/
 TOKEN = "__WW_TOKEN__"
 NAME = "__WW_NAME__"
-VERSION = "7"
+VERSION = "8"
 
 POLL_WAIT = 25                    # kiek s serveris laiko atvirą „poll“
 FETCH_TIMEOUT = 30                # greitam (be JS) parsiuntimui
